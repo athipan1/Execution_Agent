@@ -6,6 +6,11 @@ class Settings(BaseSettings):
     DB_MODE: str = "memory"
     DB_AGENT_URL: Optional[str] = None
 
+    # Broker configuration
+    BROKER_MODE: str = "SIMULATOR"  # Can be "SIMULATOR" or "REAL"
+    BROKER_API_KEY: Optional[str] = None
+    BROKER_API_SECRET: Optional[str] = None
+
     class Config:
         env_file = ".env"
 

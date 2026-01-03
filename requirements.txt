@@ -4,6 +4,8 @@ pydantic
 pydantic-settings
 python-json-logger
 
+alpaca-trade-api
+
 # Testing dependencies
 pytest
 httpx
