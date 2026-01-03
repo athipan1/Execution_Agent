@@ -69,6 +69,7 @@ async def cancel_order(order_id: int, service: ExecutionService = Depends(get_ex
             return service.db_client.update_order(order_id, {"status": OrderStatus.CANCELLED})
     raise HTTPException(status_code=500, detail="Broker failed to cancel the order.")
 
+# Health check endpoint
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
