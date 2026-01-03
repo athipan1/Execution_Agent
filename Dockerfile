@@ -31,11 +31,11 @@ COPY --chown=appuser:appgroup app/ ./
 USER appuser
 
 # Expose the application port
-EXPOSE 8004
+EXPOSE 8005
 
 # Add healthcheck for container monitoring
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD curl -f http://localhost:8004/health || exit 1
+  CMD curl -f http://localhost:8005/health || exit 1
 
 # Define the command to run the application
-CMD ["/opt/venv/bin/uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8004"]
+CMD ["/opt/venv/bin/uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8005"]
