@@ -1,4 +1,4 @@
-name: Build & Push Manager Agent
+name: Build & Push Execution Agent
 
 on:
   push:
@@ -21,4 +21,4 @@ jobs:
         with:
           context: .
           push: true
-          tags: painaidee/manager-agent:latest
+          tags: painaidee/execution-agent:latest
