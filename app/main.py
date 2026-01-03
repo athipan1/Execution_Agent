@@ -1,0 +1,74 @@
+import uuid
+from fastapi import FastAPI, Depends, Header, Request, HTTPException, BackgroundTasks
+from typing import Optional
+
+from app.models import CreateOrderRequest, OrderResponse, Order, OrderStatus
+from app.services.execution_service import ExecutionService
+from app.db_client import get_db_client, DatabaseClient
+from app.adapters.simulator import SimulatorAdapter
+from app.config import settings
+from app.logging import get_logger
+
+app = FastAPI(
+    title="Execution Agent",
+    description="A production-grade service for executing trading orders.",
+    version="1.0.0"
+)
+
+logger = get_logger(__name__)
+
+# --- Dependency Injection ---
+def get_execution_service() -> ExecutionService:
+    db_client = get_db_client()
+    broker_adapter = SimulatorAdapter()
+    return ExecutionService(db_client, broker_adapter)
+
+# --- Middleware ---
+@app.middleware("http")
+async def security_middleware(request: Request, call_next):
+    if request.url.path in ["/health", "/docs", "/openapi.json"]:
+        return await call_next(request)
+
+    api_key = request.headers.get("X-API-KEY")
+    if not api_key or api_key != settings.API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+
+    return await call_next(request)
+
+# --- API Endpoints ---
+@app.post("/orders", response_model=OrderResponse, status_code=200)
+async def create_order(
+    order_request: CreateOrderRequest,
+    background_tasks: BackgroundTasks,
+    service: ExecutionService = Depends(get_execution_service),
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+):
+    order_request.client_order_id = idempotency_key or order_request.client_order_id
+    order = await service.create_order(order_request)
+    if order.status == OrderStatus.PENDING:
+        background_tasks.add_task(service.start_order_execution, order)
+    return order
+
+@app.get("/orders/{order_id}", response_model=Order)
+def get_order(order_id: int, db_client: DatabaseClient = Depends(get_db_client)):
+    order = db_client.get_order_by_order_id(order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    return order
+
+@app.post("/orders/{order_id}/cancel", response_model=Order)
+async def cancel_order(order_id: int, service: ExecutionService = Depends(get_execution_service)):
+    order = service.db_client.get_order_by_order_id(order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if order.status not in [OrderStatus.PLACED, OrderStatus.PARTIALLY_FILLED]:
+        raise HTTPException(status_code=400, detail=f"Order in state '{order.status}' cannot be cancelled.")
+    if order.broker_order_id:
+        cancellation_result = await service.broker_adapter.cancel_order(order.broker_order_id)
+        if cancellation_result.get("status") == OrderStatus.CANCELLED:
+            return service.db_client.update_order(order_id, {"status": OrderStatus.CANCELLED})
+    raise HTTPException(status_code=500, detail="Broker failed to cancel the order.")
+
+@app.get("/health")
+def health_check():
+    return {"status": "ok"}
