@@ -6,6 +6,7 @@ from app.models import CreateOrderRequest, OrderResponse, Order, OrderStatus
 from app.services.execution_service import ExecutionService
 from app.db_client import get_db_client, DatabaseClient
 from app.adapters.simulator import SimulatorAdapter
+from app.adapters.real import RealBrokerAdapter
 from app.config import settings
 from app.logging import get_logger
 
@@ -19,8 +20,19 @@ logger = get_logger(__name__)
 
 # --- Dependency Injection ---
 def get_execution_service() -> ExecutionService:
+    """
+    Creates an ExecutionService with the appropriate broker adapter
+    based on the application's configuration.
+    """
     db_client = get_db_client()
-    broker_adapter = SimulatorAdapter()
+
+    if settings.BROKER_MODE == "REAL":
+        logger.info("Using REAL broker adapter.")
+        broker_adapter = RealBrokerAdapter()
+    else:
+        logger.info("Using SIMULATOR broker adapter.")
+        broker_adapter = SimulatorAdapter()
+
     return ExecutionService(db_client, broker_adapter)
 
 # --- Middleware ---
