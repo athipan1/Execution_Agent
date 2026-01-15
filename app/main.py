@@ -46,7 +46,7 @@ def get_execution_service() -> ExecutionService:
 # --- Middleware ---
 @app.middleware("http")
 async def security_middleware(request: Request, call_next):
-    if request.url.path in ["/health", "/docs", "/openapi.json"]:
+    if request.url.path in ["/health", "/health/alpaca", "/docs", "/openapi.json"]:
         return await call_next(request)
 
     api_key = request.headers.get("X-API-KEY")
@@ -89,7 +89,22 @@ async def cancel_order(order_id: int, service: ExecutionService = Depends(get_ex
             return service.db_client.update_order(order_id, {"status": OrderStatus.CANCELLED})
     raise HTTPException(status_code=500, detail="Broker failed to cancel the order.")
 
+def get_alpaca_adapter() -> AlpacaAdapter:
+    """Dependency injector for the AlpacaAdapter."""
+    return AlpacaAdapter()
+
+
 # Health check endpoint
 @app.get("/health")
 def health_check():
+    return {"status": "ok"}
+
+@app.get("/health/alpaca")
+async def health_check_alpaca(adapter: AlpacaAdapter = Depends(get_alpaca_adapter)):
+    """Checks the connection to the Alpaca API."""
+    if not await adapter.check_connection():
+        raise HTTPException(
+            status_code=503,
+            detail="Could not connect to Alpaca.",
+        )
     return {"status": "ok"}
