@@ -6,7 +6,7 @@ from app.models import CreateOrderRequest, OrderResponse, Order, OrderStatus
 from app.services.execution_service import ExecutionService
 from app.db_client import get_db_client, DatabaseClient
 from app.adapters.simulator import SimulatorAdapter
-from app.adapters.real import RealBrokerAdapter
+from app.adapters.alpaca import AlpacaAdapter
 from app.config import settings
 from app.logging import get_logger
 
@@ -25,12 +25,20 @@ def get_execution_service() -> ExecutionService:
     based on the application's configuration.
     """
     db_client = get_db_client()
+    broker_adapter = None
 
-    if settings.BROKER_MODE == "REAL":
-        logger.info("Using REAL broker adapter.")
-        broker_adapter = RealBrokerAdapter()
-    else:
+    if settings.BROKER_MODE == "ALPACA":
+        logger.info("Using ALPACA broker adapter.")
+        broker_adapter = AlpacaAdapter()
+    elif settings.BROKER_MODE == "SIMULATOR":
         logger.info("Using SIMULATOR broker adapter.")
+        broker_adapter = SimulatorAdapter()
+    else:
+        # Default to simulator if mode is unknown or not set
+        logger.warning(
+            f"Unknown BROKER_MODE '{settings.BROKER_MODE}'. Defaulting to SIMULATOR.",
+            extra={"broker_mode": settings.BROKER_MODE},
+        )
         broker_adapter = SimulatorAdapter()
 
     return ExecutionService(db_client, broker_adapter)

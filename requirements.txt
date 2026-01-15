@@ -10,3 +10,4 @@ alpaca-trade-api
 pytest
 httpx
 pytest-asyncio
+respx
