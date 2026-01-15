@@ -135,3 +135,17 @@ class AlpacaAdapter(BrokerAdapter):
     async def get_order_status(self, broker_order_id: str) -> dict:
         # Placeholder implementation
         return {"status": "error", "message": "Not implemented"}
+
+    async def check_connection(self) -> bool:
+        """
+        Verifies the connection to Alpaca by attempting to authenticate.
+        Returns True if successful, False otherwise.
+        """
+        logger.info("Checking connection to Alpaca...")
+        token = await self._get_valid_access_token()
+        if token:
+            logger.info("Alpaca connection check successful.")
+            return True
+        else:
+            logger.error("Alpaca connection check failed.")
+            return False

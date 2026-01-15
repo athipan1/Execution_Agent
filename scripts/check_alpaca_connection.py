@@ -1,0 +1,38 @@
+import asyncio
+import os
+import sys
+
+# Add the project root to the Python path to allow importing from 'app'
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+from app.adapters.alpaca import AlpacaAdapter
+from app.config import settings
+
+async def main():
+    """
+    Main function to run the Alpaca connection check.
+    """
+    print("--- Running Alpaca Connection Check ---")
+
+    # Verify that necessary environment variables are set
+    if not settings.ALPACA_CLIENT_ID or not settings.ALPACA_CLIENT_SECRET:
+        print("\n[ERROR] Missing required environment variables.")
+        print("Please set ALPACA_CLIENT_ID and ALPACA_CLIENT_SECRET in your .env file or environment.")
+        sys.exit(1)
+
+    print(f"Alpaca Client ID: {settings.ALPACA_CLIENT_ID[:4]}... (loaded)")
+    print("Checking connection to Alpaca API...")
+
+    adapter = AlpacaAdapter()
+    is_connected = await adapter.check_connection()
+
+    if is_connected:
+        print("\n[SUCCESS] Connection to Alpaca was successful!")
+    else:
+        print("\n[FAILURE] Could not connect to Alpaca.")
+        print("Please check your credentials, network connection, and Alpaca API status.")
+
+    print("\n--- Check Complete ---")
+
+if __name__ == "__main__":
+    asyncio.run(main())
