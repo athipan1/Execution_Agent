@@ -1,0 +1,29 @@
+name: Alpaca Connection Test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-connection:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install --upgrade wheel setuptools
+          pip install -r requirements.txt
+
+      - name: Run Alpaca Connection Test
+        env:
+          ALPACA_CLIENT_ID: ${{ secrets.ALPACA_CLIENT_ID }}
+          ALPACA_CLIENT_SECRET: ${{ secrets.ALPACA_CLIENT_SECRET }}
+        run: |
+          python scripts/check_alpaca_connection.py
