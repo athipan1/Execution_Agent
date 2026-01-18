@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     ALPACA_AUTHORIZATION_CODE: Optional[str] = None
     ALPACA_REFRESH_TOKEN: Optional[str] = None
     ALPACA_REDIRECT_URI: str = "https://yourapp.com/callback"
-    ALPACA_API_URL: str = "https://paper-api.alpaca.markets"
+    ALPACA_API_URL: str = "https://paper-api.alpaca.markets/v2"
     ALPACA_BROKER_URL: str = "https://broker-api.sandbox.alpaca.markets"
 
     class Config:
