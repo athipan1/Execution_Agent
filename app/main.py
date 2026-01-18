@@ -101,10 +101,22 @@ def health_check():
 
 @app.get("/health/alpaca")
 async def health_check_alpaca(adapter: AlpacaAdapter = Depends(get_alpaca_adapter)):
-    """Checks the connection to the Alpaca API."""
-    if not await adapter.check_connection():
+    """
+    Checks the full trading lifecycle with the Alpaca API by placing and
+    immediately cancelling an order. This uses a dedicated, hardcoded API key
+    for this specific health check.
+    """
+    # Hardcoded credentials for the health check as requested
+    API_KEY = "PKL7YZLSGADDWZ2PJ55JQXGSEN"
+    SECRET_KEY = "3VLS8zgjMxPy3SB6dVLZpzA8YsP9evgSXoLsAtqjMjqc"
+
+    result = await adapter.health_check_place_and_cancel_order(API_KEY, SECRET_KEY)
+
+    if result.get("status") != "ok":
+        # Return a 503 Service Unavailable status if the health check fails
         raise HTTPException(
             status_code=503,
-            detail="Could not connect to Alpaca.",
+            detail=result,
         )
-    return {"status": "ok"}
+
+    return result

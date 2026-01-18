@@ -75,8 +75,46 @@ class AlpacaAdapter(BrokerAdapter):
             return None
 
     async def cancel_order(self, broker_order_id: str) -> dict:
-        # Placeholder implementation
-        return {"status": "error", "message": "Not implemented"}
+        """
+        Cancels a specific order with Alpaca.
+        """
+        headers = self._get_auth_headers()
+        url = f"{settings.ALPACA_API_URL}/v2/orders/{broker_order_id}"
+
+        try:
+            response = await self._client.delete(url, headers=headers)
+            response.raise_for_status()
+
+            # A successful cancellation returns a 204 No Content status.
+            # If the order is already cancelled, filled, or expired, Alpaca might return a 422 or 404.
+            if response.status_code == 204:
+                logger.info(f"Successfully cancelled order {broker_order_id}.")
+                return {"status": OrderStatus.CANCELLED.value}
+            else:
+                # This case might not be reached if raise_for_status() covers all non-2xx codes
+                logger.warning(
+                    f"Received unexpected status code {response.status_code} when cancelling order {broker_order_id}.",
+                    extra={"response": response.text}
+                )
+                return {"status": "error", "message": "Unexpected status code from broker."}
+
+        except httpx.RequestError as e:
+            logger.error(f"Failed to send cancellation request to Alpaca for order {broker_order_id}.", extra={"error": str(e)})
+            return {"status": "error", "message": "Request to broker failed."}
+        except httpx.HTTPStatusError as e:
+            # Handle cases where the order cannot be cancelled (e.g., already filled)
+            if e.response.status_code in [404, 422]:
+                 logger.warning(
+                    f"Order {broker_order_id} could not be cancelled. It might be already filled, expired or cancelled.",
+                    extra={"status_code": e.response.status_code, "response": e.response.text},
+                )
+                 return {"status": "error", "message": f"Order cannot be cancelled: {e.response.json().get('message')}"}
+            else:
+                logger.error(
+                    f"HTTP error when cancelling order {broker_order_id}.",
+                    extra={"status_code": e.response.status_code, "response": e.response.text},
+                )
+                return {"status": "error", "message": "HTTP error from broker."}
 
     async def get_order_status(self, broker_order_id: str) -> dict:
         # Placeholder implementation
@@ -105,3 +143,101 @@ class AlpacaAdapter(BrokerAdapter):
                 extra={"status_code": e.response.status_code, "response": e.response.text},
             )
             return False
+
+    async def health_check_place_and_cancel_order(self, api_key: str, secret_key: str) -> dict:
+        """
+        Performs a health check by placing and immediately cancelling an order.
+        Uses the provided API key and secret for this specific operation.
+        """
+        log_extra = {"operation": "health_check_place_and_cancel_order"}
+        logger.info("Starting Alpaca health check: place and cancel order.", extra=log_extra)
+
+        # --- Place Order ---
+        order_headers = {
+            "APCA-API-KEY-ID": api_key,
+            "APCA-API-SECRET-KEY": secret_key,
+            "Content-Type": "application/json",
+        }
+        order_payload = {
+            "side": "buy",
+            "symbol": "SPY",
+            "qty": "1",
+            "type": "market",
+            "time_in_force": "gtc",
+        }
+        order_url = f"{settings.ALPACA_API_URL}/v2/orders"
+        broker_order_id = None
+
+        try:
+            logger.info("Attempting to place a test order for SPY.", extra=log_extra)
+            response = await self._client.post(order_url, headers=order_headers, json=order_payload)
+            response.raise_for_status()
+            order_data = response.json()
+            broker_order_id = order_data.get("id")
+            if not broker_order_id:
+                logger.error("Order creation failed: Broker did not return an order ID.", extra=log_extra)
+                return {"status": "error", "message": "Order creation failed, no order ID returned."}
+            logger.info(f"Test order placed successfully. Broker Order ID: {broker_order_id}", extra=log_extra)
+
+        except httpx.HTTPStatusError as e:
+            logger.error(
+                "HTTP error during order placement.",
+                extra={**log_extra, "status_code": e.response.status_code, "response": e.response.text},
+            )
+            return {"status": "error", "creation": "failed", "cancellation": "skipped", "reason": e.response.text}
+        except Exception as e:
+            logger.error("An unexpected error occurred during order placement.", extra={**log_extra, "error": str(e)})
+            return {"status": "error", "creation": "failed", "cancellation": "skipped", "reason": str(e)}
+
+        # --- Cancel Order ---
+        cancel_headers = {
+            "APCA-API-KEY-ID": api_key,
+            "APCA-API-SECRET-KEY": secret_key,
+        }
+        cancel_url = f"{settings.ALPACA_API_URL}/v2/orders/{broker_order_id}"
+        try:
+            logger.info(f"Attempting to cancel test order {broker_order_id}.", extra=log_extra)
+            response = await self._client.delete(cancel_url, headers=cancel_headers)
+            response.raise_for_status()
+            logger.info(f"Test order {broker_order_id} cancelled successfully.", extra=log_extra)
+
+            return {
+                "status": "ok",
+                "order_id": broker_order_id,
+                "creation": "success",
+                "cancellation": "success",
+            }
+        except httpx.HTTPStatusError as e:
+            # A 422 or 404 can happen if the market order fills instantly
+            if e.response.status_code in [422, 404]:
+                logger.warning(
+                    f"Order {broker_order_id} could not be cancelled, likely because it was filled instantly.",
+                    extra={**log_extra, "response": e.response.text}
+                )
+                return {
+                    "status": "ok",
+                    "order_id": broker_order_id,
+                    "creation": "success",
+                    "cancellation": "not_cancelled_or_already_filled",
+                    "reason": e.response.text
+                }
+            logger.error(
+                f"HTTP error during order cancellation for {broker_order_id}.",
+                extra={**log_extra, "status_code": e.response.status_code, "response": e.response.text},
+            )
+            return {
+                "status": "error",
+                "order_id": broker_order_id,
+                "creation": "success",
+                "cancellation": "failed",
+                "reason": e.response.text
+            }
+        except Exception as e:
+            logger.error(f"An unexpected error occurred during order cancellation for {broker_order_id}.", extra={**log_extra, "error": str(e)})
+            return {
+                "status": "error",
+                "order_id": broker_order_id,
+                "creation": "success",
+                "cancellation": "failed",
+                "reason": str(e)
+            }
