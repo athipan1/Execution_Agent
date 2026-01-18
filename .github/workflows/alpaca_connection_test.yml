@@ -23,7 +23,7 @@ jobs:
 
       - name: Run Alpaca Connection Test
         env:
-          ALPACA_CLIENT_ID: ${{ secrets.ALPACA_CLIENT_ID }}
-          ALPACA_CLIENT_SECRET: ${{ secrets.ALPACA_CLIENT_SECRET }}
+          ALPACA_API_KEY_ID: ${{ secrets.ALPACA_CLIENT_ID }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_CLIENT_SECRET }}
         run: |
           python scripts/check_alpaca_connection.py

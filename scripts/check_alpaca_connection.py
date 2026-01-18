@@ -15,12 +15,12 @@ async def main():
     print("--- Running Alpaca Connection Check ---")
 
     # Verify that necessary environment variables are set
-    if not settings.ALPACA_CLIENT_ID or not settings.ALPACA_CLIENT_SECRET:
+    if not settings.ALPACA_API_KEY_ID or not settings.ALPACA_SECRET_KEY:
         print("\n[ERROR] Missing required environment variables.")
-        print("Please set ALPACA_CLIENT_ID and ALPACA_CLIENT_SECRET in your .env file or environment.")
+        print("Please set ALPACA_API_KEY_ID and ALPACA_SECRET_KEY in your .env file or environment.")
         sys.exit(1)
 
-    print(f"Alpaca Client ID: {settings.ALPACA_CLIENT_ID[:4]}... (loaded)")
+    print(f"Alpaca API Key ID: {settings.ALPACA_API_KEY_ID[:4]}... (loaded)")
     print("Checking connection to Alpaca API...")
 
     adapter = AlpacaAdapter()
