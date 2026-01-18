@@ -13,8 +13,14 @@ settings.ALPACA_CLIENT_ID = "test_client_id"
 settings.ALPACA_CLIENT_SECRET = "test_client_secret"
 
 @pytest.fixture
-def alpaca_adapter():
-    return AlpacaAdapter()
+def alpaca_adapter(monkeypatch):
+    """
+    Provides a clean instance of the AlpacaAdapter for each test,
+    and patches settings to provide a default refresh token.
+    """
+    monkeypatch.setattr(settings, 'ALPACA_REFRESH_TOKEN', "test_refresh_token")
+    adapter = AlpacaAdapter()
+    return adapter
 
 @pytest.fixture
 def sample_order():
@@ -31,15 +37,34 @@ def sample_order():
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_check_connection_success(alpaca_adapter):
+    """
+    Tests that check_connection returns True when authentication and account checks are successful.
+    """
+    respx.post(AlpacaAdapter.AUTH_URL).mock(return_value=Response(200, json={"access_token": "fake_token"}))
+    respx.get(f"{settings.ALPACA_API_URL}/v2/account").mock(return_value=Response(200, json={"id": "test_account"}))
+    assert await alpaca_adapter.check_connection() is True
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_check_connection_failure(alpaca_adapter):
+    """
+    Tests that check_connection returns False when authentication fails.
+    """
+    respx.post(AlpacaAdapter.AUTH_URL).mock(return_value=Response(500, text="Internal Server Error"))
+    assert await alpaca_adapter.check_connection() is False
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_place_order_success(alpaca_adapter, sample_order):
     """
     Tests a successful order placement workflow.
     """
-    # 1. Mock the authentication request
-    auth_request = respx.post(settings.ALPACA_AUTH_URL).mock(
+    auth_request = respx.post(AlpacaAdapter.AUTH_URL).mock(
         return_value=Response(200, json={"access_token": "fake_token", "expires_in": 3600})
     )
-    # 2. Mock the order placement request
     order_request = respx.post(f"{settings.ALPACA_BROKER_URL}/v1/orders").mock(
         return_value=Response(200, json={"id": "broker-order-id-123", "status": "accepted"})
     )
@@ -55,13 +80,14 @@ async def test_place_order_success(alpaca_adapter, sample_order):
         "broker_order_id": "broker-order-id-123",
     })
 
+
 @pytest.mark.asyncio
 @respx.mock
 async def test_place_order_auth_failure(alpaca_adapter, sample_order):
     """
     Tests the workflow where the initial authentication with Alpaca fails.
     """
-    respx.post(settings.ALPACA_AUTH_URL).mock(return_value=Response(401, text="Invalid credentials"))
+    respx.post(AlpacaAdapter.AUTH_URL).mock(return_value=Response(401, text="Invalid credentials"))
 
     update_callback = AsyncMock()
     await alpaca_adapter.place_order(sample_order, update_callback)
@@ -69,8 +95,9 @@ async def test_place_order_auth_failure(alpaca_adapter, sample_order):
     update_callback.assert_awaited_once_with({
         "order_id": sample_order.order_id,
         "status": OrderStatus.FAILED,
-        "reason": "Authentication failed: Could not get access token.",
+        "reason": "Authentication failed: Could not get a valid access token.",
     })
+
 
 @pytest.mark.asyncio
 @respx.mock
@@ -78,14 +105,12 @@ async def test_place_order_token_expired_and_refresh_success(alpaca_adapter, sam
     """
     Tests the workflow where the access token expires and is successfully refreshed.
     """
-    # 1. First order request fails with 401
     order_route = respx.post(f"{settings.ALPACA_BROKER_URL}/v1/orders")
     order_route.side_effect = [
         Response(401, text="Token expired"),
         Response(200, json={"id": "broker-order-id-456", "status": "accepted"}),
     ]
-    # 2. Auth request is called to refresh the token
-    auth_route = respx.post(settings.ALPACA_AUTH_URL).mock(
+    auth_route = respx.post(AlpacaAdapter.AUTH_URL).mock(
         return_value=Response(200, json={"access_token": "new_fake_token"})
     )
 
@@ -96,9 +121,7 @@ async def test_place_order_token_expired_and_refresh_success(alpaca_adapter, sam
     update_callback = AsyncMock()
     await alpaca_adapter.place_order(sample_order, update_callback)
 
-    # The auth route should only be called ONCE, after the 401 failure.
     assert auth_route.call_count == 1
-    # The order route should be called twice (initial attempt + retry).
     assert order_route.call_count == 2
     update_callback.assert_awaited_once_with({
         "order_id": sample_order.order_id,
@@ -106,13 +129,14 @@ async def test_place_order_token_expired_and_refresh_success(alpaca_adapter, sam
         "broker_order_id": "broker-order-id-456",
     })
 
+
 @pytest.mark.asyncio
 @respx.mock
 async def test_place_order_broker_rejection(alpaca_adapter, sample_order):
     """
     Tests the workflow where the broker rejects the order.
     """
-    respx.post(settings.ALPACA_AUTH_URL).mock(return_value=Response(200, json={"access_token": "fake_token"}))
+    respx.post(AlpacaAdapter.AUTH_URL).mock(return_value=Response(200, json={"access_token": "fake_token"}))
     respx.post(f"{settings.ALPACA_BROKER_URL}/v1/orders").mock(
         return_value=Response(403, json={"message": "Insufficient buying power"})
     )
