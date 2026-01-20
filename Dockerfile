@@ -21,11 +21,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl && \
 RUN addgroup --system appgroup && adduser --system --ingroup appgroup appuser
 
 # Set working directory for the application
-WORKDIR /home/appuser/app
+WORKDIR /home/appuser
 
-# Copy virtual environment and application code from builder stage
+# Copy virtual environment from builder stage
 COPY --from=builder /opt/venv /opt/venv
-COPY --chown=appuser:appgroup app/ ./
+
+# Copy application source code
+# The --chown flag ensures the appuser owns the files
+COPY --chown=appuser:appgroup src/ ./src/
+
+# Set PYTHONPATH to include the src directory
+ENV PYTHONPATH=/home/appuser/src
 
 # Switch to the non-root user
 USER appuser
@@ -38,4 +44,5 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD curl -f http://localhost:8005/health || exit 1
 
 # Define the command to run the application
-CMD ["/opt/venv/bin/uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8005"]
+# We now point to `app.main:app` because `app` is a package in PYTHONPATH
+CMD ["/opt/venv/bin/uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8005"]
