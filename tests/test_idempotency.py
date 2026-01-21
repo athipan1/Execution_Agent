@@ -28,12 +28,12 @@ def test_idempotency_with_client_order_id(client: TestClient):
     client_order_id = str(uuid.uuid4())
     order_data = {**BASE_ORDER, "client_order_id": client_order_id}
 
-    response1 = client.post("/orders", headers=HEADERS, json=order_data)
+    response1 = client.post("/execute", headers=HEADERS, json=order_data)
     assert response1.status_code == 200
     order1 = response1.json()
     assert "order_id" in order1
 
-    response2 = client.post("/orders", headers=HEADERS, json=order_data)
+    response2 = client.post("/execute", headers=HEADERS, json=order_data)
     assert response2.status_code == 200
     order2 = response2.json()
 
@@ -51,12 +51,12 @@ def test_idempotency_with_header(client: TestClient):
     order_data1 = {**BASE_ORDER, "client_order_id": str(uuid.uuid4())}
     order_data2 = {**BASE_ORDER, "client_order_id": str(uuid.uuid4())}
 
-    response1 = client.post("/orders", headers=custom_headers, json=order_data1)
+    response1 = client.post("/execute", headers=custom_headers, json=order_data1)
     assert response1.status_code == 200
     order1 = response1.json()
     assert order1["client_order_id"] == idempotency_key
 
-    response2 = client.post("/orders", headers=custom_headers, json=order_data2)
+    response2 = client.post("/execute", headers=custom_headers, json=order_data2)
     assert response2.status_code == 200
     order2 = response2.json()
 
