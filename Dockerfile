@@ -5,8 +5,8 @@ FROM python:3.12-slim AS builder
 WORKDIR /opt/venv
 RUN python -m venv .
 
-COPY requirements.prod.txt .
-RUN . /opt/venv/bin/activate && pip install --no-cache-dir -r requirements.prod.txt
+COPY requirements.txt .
+RUN . /opt/venv/bin/activate && pip install --no-cache-dir -r requirements.txt
 
 
 # ---- Final Stage ----
@@ -29,6 +29,9 @@ COPY --from=builder /opt/venv /opt/venv
 # Copy application source code from the local 'src' directory into the image
 COPY --chown=appuser:appgroup src/ .
 
+# Set PYTHONPATH to include the application root
+ENV PYTHONPATH=/home/appuser
+
 # Switch to the non-root user
 USER appuser
 
@@ -39,6 +42,5 @@ EXPOSE 8005
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD curl -f http://localhost:8005/health || exit 1
 
-# Define the command to run the application
-# We now point to `app.main:app` because `app` is a package in PYTHONPATH
-CMD ["/opt/venv/bin/uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8005"]
+# Define the command to run the application using Gunicorn for production
+CMD ["/opt/venv/bin/gunicorn", "-k", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:8005", "app.main:app"]

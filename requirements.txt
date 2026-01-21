@@ -1,13 +1,14 @@
+# Application Dependencies
 fastapi
+gunicorn
 uvicorn[standard]
 pydantic
 pydantic-settings
 python-json-logger
-
 alpaca-trade-api
-
-# Testing dependencies
-pytest
 httpx
+
+# Testing Dependencies
+pytest
 pytest-asyncio
 respx
