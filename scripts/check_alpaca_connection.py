@@ -1,9 +1,5 @@
 import asyncio
-import os
 import sys
-
-# Add the project root to the Python path to allow importing from 'app'
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from app.adapters.alpaca import AlpacaAdapter
 from app.config import settings
