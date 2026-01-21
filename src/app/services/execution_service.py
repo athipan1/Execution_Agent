@@ -1,4 +1,4 @@
-from app.models import CreateOrderRequest, Order
+from app.models import CreateOrderRequest, Order, OrderStatus
 from app.db_client import DatabaseClient
 from app.adapters.base import BrokerAdapter
 from app.logging import get_logger
@@ -59,6 +59,14 @@ class ExecutionService:
             "Starting background execution for order.",
             extra={"order_id": order.order_id, "symbol": order.symbol}
         )
-        # Directly await the broker adapter's call. FastAPI's BackgroundTasks
-        # will handle running this async function in the background.
-        await self.broker_adapter.place_order(order, self._handle_broker_updates)
+        try:
+            # Directly await the broker adapter's call. FastAPI's BackgroundTasks
+            # will handle running this async function in the background.
+            await self.broker_adapter.place_order(order, self._handle_broker_updates)
+        except Exception as e:
+            logger.error(
+                "Order execution failed.",
+                extra={"order_id": order.order_id, "error": str(e)},
+                exc_info=True
+            )
+            self.db_client.update_order(order.order_id, {"status": OrderStatus.FAILED, "error_message": str(e)})
