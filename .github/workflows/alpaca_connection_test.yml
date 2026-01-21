@@ -25,5 +25,6 @@ jobs:
         env:
           ALPACA_API_KEY_ID: ${{ secrets.ALPACA_CLIENT_ID }}
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_CLIENT_SECRET }}
+          PYTHONPATH: src
         run: |
           python scripts/check_alpaca_connection.py
