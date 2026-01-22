@@ -20,19 +20,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl && \
 # Create a non-root user and group for security
 RUN addgroup --system appgroup && adduser --system --ingroup appgroup appuser
 
-# Set working directory for the application
+# Set working directory. All subsequent paths are relative to this directory.
 WORKDIR /home/appuser
 
 # Copy virtual environment from builder stage
 COPY --from=builder /opt/venv /opt/venv
 
-# Copy application source code from the local 'src' directory into the image
-COPY --chown=appuser:appgroup src/ .
+# Copy the application source code from the local 'src' directory into a 'src'
+# subdirectory in the container. This preserves the project's src layout.
+# The application code will be at /home/appuser/src/
+COPY --chown=appuser:appgroup src/ ./src/
 
-# Set PYTHONPATH to include the application root
-ENV PYTHONPATH=/home/appuser
+# Set the PYTHONPATH to the 'src' directory. This allows Python's import system
+# to find the 'app' module correctly (e.g., 'import app.main').
+ENV PYTHONPATH=/home/appuser/src
 
-# Switch to the non-root user
+# Switch to the non-root user for security
 USER appuser
 
 # Expose the application port
@@ -42,5 +45,8 @@ EXPOSE 8005
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD curl -f http://localhost:8005/health || exit 1
 
-# Define the command to run the application using Gunicorn for production
+# Define the command to run the application.
+# Gunicorn looks for the module 'app.main' and the callable 'app' within it.
+# Because PYTHONPATH is set to /home/appuser/src, Python can resolve 'app.main'
+# to the file at /home/appuser/src/app/main.py.
 CMD ["/opt/venv/bin/gunicorn", "-k", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:8005", "app.main:app"]
