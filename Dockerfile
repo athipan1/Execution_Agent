@@ -26,11 +26,11 @@ WORKDIR /home/appuser
 # Copy virtual environment from builder stage
 COPY --from=builder /opt/venv /opt/venv
 
-# Copy application source code from the local 'src' directory into the image
-COPY --chown=appuser:appgroup src/ .
+# Copy the 'src' directory itself into the working directory
+COPY --chown=appuser:appgroup src/ ./src/
 
-# Set PYTHONPATH to include the application root
-ENV PYTHONPATH=/home/appuser
+# Set PYTHONPATH to point to the new src directory
+ENV PYTHONPATH=/home/appuser/src
 
 # Switch to the non-root user
 USER appuser
