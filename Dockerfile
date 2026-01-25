@@ -46,7 +46,7 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD curl -f http://localhost:8005/health || exit 1
 
 # Define the command to run the application.
-# Gunicorn looks for the module 'app.main' and the callable 'app' within it.
-# Because PYTHONPATH is set to /home/appuser/src, Python can resolve 'app.main'
-# to the file at /home/appuser/src/app/main.py.
-CMD ["/opt/venv/bin/gunicorn", "-k", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:8005", "app.main:app"]
+# Gunicorn looks for the module 'src.app.main' and the callable 'app' within it.
+# Because PYTHONPATH is set to /home/appuser/src, Python can resolve 'src.app.main'
+# to the file at /home/appuser/src/src/app/main.py.
+CMD ["/opt/venv/bin/gunicorn", "-k", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:8005", "src.app.main:app"]
