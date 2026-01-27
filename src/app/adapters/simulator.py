@@ -1,7 +1,8 @@
 import asyncio
 import uuid
+from typing import Dict, Any
 from app.adapters.base import BrokerAdapter, StatusUpdateCallable
-from app.models import Order, OrderStatus, OrderSide
+from app.models import Order, OrderStatus, OrderSide, TradeOrder
 
 class SimulatorAdapter(BrokerAdapter):
     """
@@ -95,3 +96,36 @@ class SimulatorAdapter(BrokerAdapter):
         # for this simple implementation. The primary update mechanism is the callback.
         # We return a placeholder response.
         return {"status": OrderStatus.PLACED, "executed_quantity": 0}
+
+    async def execute(self, trade_order: TradeOrder) -> Dict[str, Any]:
+        """
+        Directly executes a trade in the simulator.
+        """
+        broker_order_id = f"sim-exec-{uuid.uuid4()}"
+        symbol = trade_order.symbol.upper()
+
+        if "FAIL" in symbol:
+            return {
+                "status": OrderStatus.FAILED,
+                "reason": "Simulated broker rejection for symbol.",
+                "broker_order_id": broker_order_id
+            }
+
+        # For the direct execute, we return success immediately
+        # We'll calculate a price using the same logic
+        # TradeOrder doesn't have price, so we'll use a default
+        reference_price = 100.0
+        slippage = 0.001
+        if trade_order.side == OrderSide.BUY:
+            avg_price = reference_price * (1 + slippage)
+        else:
+            avg_price = reference_price * (1 - slippage)
+
+        return {
+            "status": OrderStatus.EXECUTED,
+            "broker_order_id": broker_order_id,
+            "symbol": trade_order.symbol,
+            "side": trade_order.side,
+            "quantity": trade_order.quantity,
+            "avg_execution_price": round(avg_price, 2)
+        }

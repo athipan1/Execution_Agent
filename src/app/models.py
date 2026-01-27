@@ -36,6 +36,12 @@ class CreateOrderRequest(BaseModel):
     quantity: int
     time_in_force: TimeInForce = TimeInForce.GTC
 
+class TradeOrder(BaseModel):
+    symbol: str
+    quantity: int
+    side: OrderSide
+    order_type: OrderType = OrderType.MARKET
+
 class OrderResponse(BaseModel):
     order_id: int
     client_order_id: str

@@ -2,9 +2,10 @@ import uuid
 from fastapi import FastAPI, Depends, Header, Request, HTTPException, BackgroundTasks
 from typing import Optional
 
-from app.models import CreateOrderRequest, OrderResponse, Order, OrderStatus
+from app.models import CreateOrderRequest, OrderResponse, Order, OrderStatus, TradeOrder
 from app.services.execution_service import ExecutionService
 from app.db_client import get_db_client, DatabaseClient
+from app.adapters.base import BrokerAdapter
 from app.adapters.simulator import SimulatorAdapter
 from app.adapters.alpaca import AlpacaAdapter
 from app.config import settings
@@ -19,28 +20,29 @@ app = FastAPI(
 logger = get_logger(__name__)
 
 # --- Dependency Injection ---
-def get_execution_service() -> ExecutionService:
+def get_broker_adapter() -> BrokerAdapter:
+    """
+    Creates the appropriate broker adapter based on configuration.
+    """
+    if settings.BROKER_MODE == "ALPACA":
+        return AlpacaAdapter()
+    elif settings.BROKER_MODE == "SIMULATOR":
+        return SimulatorAdapter()
+    else:
+        logger.warning(
+            f"Unknown BROKER_MODE '{settings.BROKER_MODE}'. Defaulting to SIMULATOR.",
+            extra={"broker_mode": settings.BROKER_MODE},
+        )
+        return SimulatorAdapter()
+
+def get_execution_service(
+    broker_adapter: BrokerAdapter = Depends(get_broker_adapter)
+) -> ExecutionService:
     """
     Creates an ExecutionService with the appropriate broker adapter
     based on the application's configuration.
     """
     db_client = get_db_client()
-    broker_adapter = None
-
-    if settings.BROKER_MODE == "ALPACA":
-        logger.info("Using ALPACA broker adapter.")
-        broker_adapter = AlpacaAdapter()
-    elif settings.BROKER_MODE == "SIMULATOR":
-        logger.info("Using SIMULATOR broker adapter.")
-        broker_adapter = SimulatorAdapter()
-    else:
-        # Default to simulator if mode is unknown or not set
-        logger.warning(
-            f"Unknown BROKER_MODE '{settings.BROKER_MODE}'. Defaulting to SIMULATOR.",
-            extra={"broker_mode": settings.BROKER_MODE},
-        )
-        broker_adapter = SimulatorAdapter()
-
     return ExecutionService(db_client, broker_adapter)
 
 # --- Middleware ---
@@ -75,6 +77,16 @@ def get_order(order_id: int, db_client: DatabaseClient = Depends(get_db_client))
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     return order
+
+@app.post("/execute_trade")
+async def execute_trade(
+    order: TradeOrder,
+    broker: BrokerAdapter = Depends(get_broker_adapter)
+):
+    """
+    Executes a trade directly through the configured broker.
+    """
+    return await broker.execute(order)
 
 @app.post("/execute/{order_id}/cancel", response_model=Order)
 async def cancel_order(order_id: int, service: ExecutionService = Depends(get_execution_service)):
