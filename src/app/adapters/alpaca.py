@@ -1,8 +1,8 @@
 import httpx
-from typing import Optional
+from typing import Optional, Dict, Any
 
 from app.adapters.base import BrokerAdapter, StatusUpdateCallable
-from app.models import Order, OrderStatus
+from app.models import Order, OrderStatus, TradeOrder
 from app.config import settings
 from app.logging import get_logger
 
@@ -81,6 +81,45 @@ class AlpacaAdapter(BrokerAdapter):
     async def get_order_status(self, broker_order_id: str) -> dict:
         # Placeholder implementation
         return {"status": "error", "message": "Not implemented"}
+
+    async def execute(self, trade_order: TradeOrder) -> Dict[str, Any]:
+        """
+        Executes a trade directly with Alpaca.
+        """
+        headers = self._get_auth_headers()
+        headers["Content-Type"] = "application/json"
+
+        payload = {
+            "side": trade_order.side.value,
+            "symbol": trade_order.symbol,
+            "qty": str(trade_order.quantity),
+            "type": trade_order.order_type.value,
+            "time_in_force": "gtc",
+        }
+        url = f"{settings.ALPACA_API_URL}/v2/orders"
+
+        try:
+            response = await self._client.post(url, headers=headers, json=payload)
+            if response.is_error:
+                return {
+                    "status": OrderStatus.FAILED,
+                    "reason": f"Alpaca API error: {response.text}",
+                    "status_code": response.status_code
+                }
+
+            broker_order = response.json()
+            return {
+                "status": OrderStatus.PLACED,
+                "broker_order_id": broker_order["id"],
+                "symbol": trade_order.symbol,
+                "side": trade_order.side
+            }
+        except httpx.RequestError as e:
+            logger.error("Failed to send request to Alpaca.", extra={"error": str(e)})
+            return {
+                "status": OrderStatus.FAILED,
+                "reason": f"Request failed: {str(e)}"
+            }
 
     async def check_connection(self) -> bool:
         """
