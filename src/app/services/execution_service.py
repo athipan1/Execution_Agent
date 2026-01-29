@@ -19,7 +19,7 @@ class ExecutionService:
         """
         Creates a new order, ensuring idempotency.
         """
-        existing_order = self.db_client.get_order_by_client_id(order_request.client_order_id)
+        existing_order = await self.db_client.get_order_by_client_id(order_request.client_order_id)
         if existing_order:
             logger.info(
                 "Idempotent request received for existing order.",
@@ -27,7 +27,7 @@ class ExecutionService:
             )
             return existing_order
 
-        new_order = self.db_client.create_order(order_request)
+        new_order = await self.db_client.create_order(order_request)
         logger.info(
             "New order created in pending state.",
             extra={"client_order_id": new_order.client_order_id, "order_id": new_order.order_id}
@@ -48,7 +48,7 @@ class ExecutionService:
             "Received broker update for order.",
             extra={"order_id": order_id, "status": updates.get("status")}
         )
-        self.db_client.update_order(order_id, updates)
+        await self.db_client.update_order(order_id, updates)
 
     async def start_order_execution(self, order: Order):
         """
@@ -69,4 +69,4 @@ class ExecutionService:
                 extra={"order_id": order.order_id, "error": str(e)},
                 exc_info=True
             )
-            self.db_client.update_order(order.order_id, {"status": OrderStatus.FAILED, "error_message": str(e)})
+            await self.db_client.update_order(order.order_id, {"status": OrderStatus.FAILED, "error_message": str(e)})
