@@ -2,7 +2,7 @@ import uuid
 from fastapi import FastAPI, Depends, Header, Request, HTTPException, BackgroundTasks
 from typing import Optional
 
-from app.models import CreateOrderRequest, OrderResponse, Order, OrderStatus, TradeOrder
+from app.models import CreateOrderRequest, OrderResponse, Order, OrderStatus
 from app.services.execution_service import ExecutionService
 from app.db_client import get_db_client, DatabaseClient
 from app.adapters.base import BrokerAdapter
@@ -58,13 +58,19 @@ async def security_middleware(request: Request, call_next):
     return await call_next(request)
 
 # --- API Endpoints ---
+
 @app.post("/execute", response_model=OrderResponse, status_code=200)
+@app.post("/execute_trade", response_model=OrderResponse, status_code=200, include_in_schema=False)
 async def create_order(
     order_request: CreateOrderRequest,
     background_tasks: BackgroundTasks,
     service: ExecutionService = Depends(get_execution_service),
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
 ):
+    """
+    Primary endpoint for creating and executing trade orders.
+    /execute_trade is provided as an alias for backward compatibility.
+    """
     order_request.client_order_id = idempotency_key or order_request.client_order_id
     order = await service.create_order(order_request)
     if order.status == OrderStatus.PENDING:
@@ -72,33 +78,25 @@ async def create_order(
     return order
 
 @app.get("/execute/{order_id}", response_model=Order)
-def get_order(order_id: int, db_client: DatabaseClient = Depends(get_db_client)):
-    order = db_client.get_order_by_order_id(order_id)
+async def get_order(order_id: int, db_client: DatabaseClient = Depends(get_db_client)):
+    order = await db_client.get_order_by_order_id(order_id)
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     return order
 
-@app.post("/execute_trade")
-async def execute_trade(
-    order: TradeOrder,
-    broker: BrokerAdapter = Depends(get_broker_adapter)
-):
-    """
-    Executes a trade directly through the configured broker.
-    """
-    return await broker.execute(order)
-
 @app.post("/execute/{order_id}/cancel", response_model=Order)
 async def cancel_order(order_id: int, service: ExecutionService = Depends(get_execution_service)):
-    order = service.db_client.get_order_by_order_id(order_id)
+    order = await service.db_client.get_order_by_order_id(order_id)
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     if order.status not in [OrderStatus.PLACED, OrderStatus.PARTIALLY_FILLED]:
         raise HTTPException(status_code=400, detail=f"Order in state '{order.status}' cannot be cancelled.")
+
     if order.broker_order_id:
         cancellation_result = await service.broker_adapter.cancel_order(order.broker_order_id)
         if cancellation_result.get("status") == OrderStatus.CANCELLED:
-            return service.db_client.update_order(order_id, {"status": OrderStatus.CANCELLED})
+            return await service.db_client.update_order(order_id, {"status": OrderStatus.CANCELLED})
+
     raise HTTPException(status_code=500, detail="Broker failed to cancel the order.")
 
 def get_alpaca_adapter() -> AlpacaAdapter:
