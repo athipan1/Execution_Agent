@@ -62,8 +62,8 @@ async def security_middleware(request: Request, call_next):
             status_code=401,
             content=StandardAgentResponse(
                 status="error",
-                error=ErrorDetail(code="HTTP_401", message="Invalid or missing API key")
-            ).model_dump()
+                error=ErrorDetail(code="HTTP_401", message="Invalid or missing API key").model_dump()
+            ).model_dump(mode="json")
         )
 
     return await call_next(request)
@@ -74,8 +74,8 @@ async def http_exception_handler(request: Request, exc: HTTPException):
         status_code=exc.status_code,
         content=StandardAgentResponse(
             status="error",
-            error=ErrorDetail(code=f"HTTP_{exc.status_code}", message=exc.detail)
-        ).model_dump()
+            error=ErrorDetail(code=f"HTTP_{exc.status_code}", message=exc.detail).model_dump()
+        ).model_dump(mode="json")
     )
 
 @app.exception_handler(Exception)
@@ -85,8 +85,8 @@ async def generic_exception_handler(request: Request, exc: Exception):
         status_code=500,
         content=StandardAgentResponse(
             status="error",
-            error=ErrorDetail(code="INTERNAL_ERROR", message=str(exc))
-        ).model_dump()
+            error=ErrorDetail(code="INTERNAL_ERROR", message=str(exc)).model_dump()
+        ).model_dump(mode="json")
     )
 
 def wrap_success(data: Any) -> StandardAgentResponse:
@@ -110,7 +110,9 @@ async def create_order(
     order = await service.create_order(order_request)
     if order.status == OrderStatus.PENDING:
         background_tasks.add_task(service.start_order_execution, order)
-    return wrap_success(order)
+
+    # Explicitly return OrderResponse to match Manager schema
+    return wrap_success(OrderResponse.model_validate(order))
 
 @app.get("/execute/{order_id}", response_model=StandardAgentResponse[Order])
 async def get_order(order_id: int, db_client: DatabaseClient = Depends(get_db_client)):

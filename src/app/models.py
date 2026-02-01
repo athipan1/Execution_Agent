@@ -38,17 +38,29 @@ class CreateOrderRequest(BaseModel):
     time_in_force: TimeInForce = TimeInForce.GTC
 
 class TradeOrder(BaseModel):
+    client_order_id: str
     symbol: str
     quantity: int
     side: OrderSide
     order_type: OrderType = OrderType.MARKET
 
 class OrderResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     order_id: int
     client_order_id: str
+    account_id: int
+    symbol: str
+    side: OrderSide
+    order_type: OrderType
+    price: Optional[float] = None
+    quantity: int
+    time_in_force: TimeInForce
     status: OrderStatus
     broker_order_id: Optional[str] = None
     reason: Optional[str] = None
+    executed_quantity: int = 0
+    avg_execution_price: Optional[float] = None
     executed_at: Optional[datetime] = None
 
 # --- Standard Response Models ---
@@ -63,9 +75,9 @@ class StandardAgentResponse(BaseModel, Generic[T]):
     status: str  # "success" or "error"
     agent_type: str = "execution"
     version: str = "1.0"
-    timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     data: Optional[T] = None
-    error: Optional[ErrorDetail] = None
+    error: Optional[dict] = None
 
 # --- Internal Models ---
 
