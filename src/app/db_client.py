@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any
 import httpx
 import asyncio
+from fastapi.encoders import jsonable_encoder
 from app.models import Order, CreateOrderRequest
 from app.config import settings
 from app.logging import get_logger
@@ -68,7 +69,7 @@ class HttpDatabaseClient(DatabaseClient):
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.patch(
                 f"{self.base_url}/orders/{order_id}",
-                json=updates,
+                json=jsonable_encoder(updates),
                 headers={"X-API-KEY": settings.API_KEY}
             )
             response.raise_for_status()

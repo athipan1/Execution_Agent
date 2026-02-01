@@ -1,8 +1,12 @@
 import uuid
 from fastapi import FastAPI, Depends, Header, Request, HTTPException, BackgroundTasks
-from typing import Optional
+from fastapi.responses import JSONResponse
+from typing import Optional, Any
 
-from app.models import CreateOrderRequest, OrderResponse, Order, OrderStatus
+from app.models import (
+    CreateOrderRequest, OrderResponse, Order, OrderStatus,
+    StandardAgentResponse, ErrorDetail
+)
 from app.services.execution_service import ExecutionService
 from app.db_client import get_db_client, DatabaseClient
 from app.adapters.base import BrokerAdapter
@@ -45,7 +49,8 @@ def get_execution_service(
     db_client = get_db_client()
     return ExecutionService(db_client, broker_adapter)
 
-# --- Middleware ---
+# --- Middleware & Exception Handlers ---
+
 @app.middleware("http")
 async def security_middleware(request: Request, call_next):
     if request.url.path in ["/health", "/health/alpaca", "/docs", "/openapi.json"]:
@@ -53,14 +58,44 @@ async def security_middleware(request: Request, call_next):
 
     api_key = request.headers.get("X-API-KEY")
     if not api_key or api_key != settings.API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+        return JSONResponse(
+            status_code=401,
+            content=StandardAgentResponse(
+                status="error",
+                error=ErrorDetail(code="HTTP_401", message="Invalid or missing API key")
+            ).model_dump()
+        )
 
     return await call_next(request)
 
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=StandardAgentResponse(
+            status="error",
+            error=ErrorDetail(code=f"HTTP_{exc.status_code}", message=exc.detail)
+        ).model_dump()
+    )
+
+@app.exception_handler(Exception)
+async def generic_exception_handler(request: Request, exc: Exception):
+    logger.error(f"Unhandled exception: {str(exc)}", exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content=StandardAgentResponse(
+            status="error",
+            error=ErrorDetail(code="INTERNAL_ERROR", message=str(exc))
+        ).model_dump()
+    )
+
+def wrap_success(data: Any) -> StandardAgentResponse:
+    return StandardAgentResponse(status="success", data=data)
+
 # --- API Endpoints ---
 
-@app.post("/execute", response_model=OrderResponse, status_code=200)
-@app.post("/execute_trade", response_model=OrderResponse, status_code=200, include_in_schema=False)
+@app.post("/execute", response_model=StandardAgentResponse[OrderResponse], status_code=200)
+@app.post("/execute_trade", response_model=StandardAgentResponse[OrderResponse], status_code=200, include_in_schema=False)
 async def create_order(
     order_request: CreateOrderRequest,
     background_tasks: BackgroundTasks,
@@ -75,16 +110,16 @@ async def create_order(
     order = await service.create_order(order_request)
     if order.status == OrderStatus.PENDING:
         background_tasks.add_task(service.start_order_execution, order)
-    return order
+    return wrap_success(order)
 
-@app.get("/execute/{order_id}", response_model=Order)
+@app.get("/execute/{order_id}", response_model=StandardAgentResponse[Order])
 async def get_order(order_id: int, db_client: DatabaseClient = Depends(get_db_client)):
     order = await db_client.get_order_by_order_id(order_id)
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
-    return order
+    return wrap_success(order)
 
-@app.post("/execute/{order_id}/cancel", response_model=Order)
+@app.post("/execute/{order_id}/cancel", response_model=StandardAgentResponse[Order])
 async def cancel_order(order_id: int, service: ExecutionService = Depends(get_execution_service)):
     order = await service.db_client.get_order_by_order_id(order_id)
     if not order:
@@ -95,7 +130,8 @@ async def cancel_order(order_id: int, service: ExecutionService = Depends(get_ex
     if order.broker_order_id:
         cancellation_result = await service.broker_adapter.cancel_order(order.broker_order_id)
         if cancellation_result.get("status") == OrderStatus.CANCELLED:
-            return await service.db_client.update_order(order_id, {"status": OrderStatus.CANCELLED})
+            updated_order = await service.db_client.update_order(order_id, {"status": OrderStatus.CANCELLED})
+            return wrap_success(updated_order)
 
     raise HTTPException(status_code=500, detail="Broker failed to cancel the order.")
 
@@ -104,17 +140,28 @@ def get_alpaca_adapter() -> AlpacaAdapter:
     return AlpacaAdapter()
 
 
-# Health check endpoint
-@app.get("/health")
-def health_check():
-    return {"status": "ok"}
+# Health check endpoints
 
-@app.get("/health/alpaca")
+@app.get("/health", response_model=StandardAgentResponse[dict])
+async def health_check(adapter: BrokerAdapter = Depends(get_broker_adapter)):
+    broker_connected = await adapter.check_connection()
+    return wrap_success({
+        "status": "healthy" if broker_connected else "degraded",
+        "broker_connected": broker_connected,
+        "mode": settings.BROKER_MODE
+    })
+
+@app.get("/health/alpaca", response_model=StandardAgentResponse[dict])
 async def health_check_alpaca(adapter: AlpacaAdapter = Depends(get_alpaca_adapter)):
     """Checks the connection to the Alpaca API."""
-    if not await adapter.check_connection():
+    connected = await adapter.check_connection()
+    if not connected:
         raise HTTPException(
             status_code=503,
             detail="Could not connect to Alpaca.",
         )
-    return {"status": "ok"}
+    return wrap_success({
+        "status": "healthy",
+        "broker_connected": True,
+        "mode": "ALPACA"
+    })

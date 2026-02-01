@@ -1,6 +1,7 @@
 import asyncio
 import uuid
 from typing import Dict, Any
+from datetime import datetime, timezone
 from app.adapters.base import BrokerAdapter, StatusUpdateCallable
 from app.models import Order, OrderStatus, OrderSide, TradeOrder
 
@@ -72,7 +73,8 @@ class SimulatorAdapter(BrokerAdapter):
             "order_id": order.order_id,
             "status": OrderStatus.EXECUTED,
             "executed_quantity": order.quantity,
-            "avg_execution_price": round(avg_price, 2)
+            "avg_execution_price": round(avg_price, 2),
+            "executed_at": datetime.now(timezone.utc)
         })
 
     def _calculate_execution_price(self, order: Order, slippage: float = 0.001) -> float:
@@ -127,5 +129,12 @@ class SimulatorAdapter(BrokerAdapter):
             "symbol": trade_order.symbol,
             "side": trade_order.side,
             "quantity": trade_order.quantity,
-            "avg_execution_price": round(avg_price, 2)
+            "avg_execution_price": round(avg_price, 2),
+            "executed_at": datetime.now(timezone.utc)
         }
+
+    async def check_connection(self) -> bool:
+        """
+        Simulator is always connected.
+        """
+        return True
