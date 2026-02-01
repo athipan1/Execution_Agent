@@ -1,6 +1,7 @@
 from pydantic import BaseModel, Field, ConfigDict
-from typing import Optional
+from typing import Optional, Any, Generic, TypeVar
 from enum import Enum
+from datetime import datetime, timezone
 import uuid
 
 class OrderSide(str, Enum):
@@ -48,6 +49,23 @@ class OrderResponse(BaseModel):
     status: OrderStatus
     broker_order_id: Optional[str] = None
     reason: Optional[str] = None
+    executed_at: Optional[datetime] = None
+
+# --- Standard Response Models ---
+
+class ErrorDetail(BaseModel):
+    code: str
+    message: str
+
+T = TypeVar("T")
+
+class StandardAgentResponse(BaseModel, Generic[T]):
+    status: str  # "success" or "error"
+    agent_type: str = "execution"
+    version: str = "1.0"
+    timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
+    data: Optional[T] = None
+    error: Optional[ErrorDetail] = None
 
 # --- Internal Models ---
 
@@ -70,3 +88,4 @@ class Order(BaseModel):
     reason: Optional[str] = None
     executed_quantity: int = 0
     avg_execution_price: Optional[float] = None
+    executed_at: Optional[datetime] = None

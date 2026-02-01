@@ -66,3 +66,13 @@ class BrokerAdapter(ABC):
             A dictionary containing the execution result.
         """
         ...
+
+    @abstractmethod
+    async def check_connection(self) -> bool:
+        """
+        Verifies the connection to the broker.
+
+        Returns:
+            True if connected, False otherwise.
+        """
+        ...

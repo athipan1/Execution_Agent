@@ -27,7 +27,9 @@ def test_execute_trade_success(client: TestClient):
     # /execute_trade is an alias for /execute
     response = client.post("/execute_trade", headers=HEADERS, json=trade_data)
     assert response.status_code == 200
-    result = response.json()
+    data = response.json()
+    assert data["status"] == "success"
+    result = data["data"]
     assert result["status"] in ["pending", "executed"]
     order_id = result["order_id"]
 
@@ -35,7 +37,7 @@ def test_execute_trade_success(client: TestClient):
     for _ in range(10):
         time.sleep(0.1)
         response = client.get(f"/execute/{order_id}", headers=HEADERS)
-        if response.json()["status"] == "executed":
+        if response.json()["data"]["status"] == "executed":
             break
     else:
         pytest.fail("Order did not reach 'executed' status")
@@ -52,14 +54,16 @@ def test_execute_trade_fail(client: TestClient):
     }
     response = client.post("/execute_trade", headers=HEADERS, json=trade_data)
     assert response.status_code == 200
-    result = response.json()
+    data = response.json()
+    assert data["status"] == "success"
+    result = data["data"]
     order_id = result["order_id"]
 
     # Poll for completion
     for _ in range(10):
         time.sleep(0.1)
         response = client.get(f"/execute/{order_id}", headers=HEADERS)
-        if response.json()["status"] == "failed":
+        if response.json()["data"]["status"] == "failed":
             break
     else:
         pytest.fail("Order did not reach 'failed' status")
@@ -74,6 +78,8 @@ def test_execute_trade_unauthorized(client: TestClient):
         "order_type": "market"
     }
     # Test without API key
-    with pytest.raises(HTTPException) as excinfo:
-        client.post("/execute_trade", json=trade_data)
-    assert excinfo.value.status_code == 401
+    response = client.post("/execute_trade", json=trade_data)
+    assert response.status_code == 401
+    data = response.json()
+    assert data["status"] == "error"
+    assert data["error"]["code"] == "HTTP_401"

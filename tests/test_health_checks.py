@@ -11,7 +11,9 @@ def test_health_check_alpaca_success():
         with TestClient(app) as client:
             response = client.get("/health/alpaca")
             assert response.status_code == 200
-            assert response.json() == {"status": "ok"}
+            data = response.json()
+            assert data["status"] == "success"
+            assert data["data"]["status"] == "healthy"
             mock_check.assert_called_once()
 
 def test_health_check_alpaca_failure():
@@ -23,5 +25,7 @@ def test_health_check_alpaca_failure():
         with TestClient(app) as client:
             response = client.get("/health/alpaca")
             assert response.status_code == 503
-            assert response.json() == {"detail": "Could not connect to Alpaca."}
+            data = response.json()
+            assert data["status"] == "error"
+            assert data["error"]["message"] == "Could not connect to Alpaca."
             mock_check.assert_called_once()

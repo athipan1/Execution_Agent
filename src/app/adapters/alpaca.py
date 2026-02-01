@@ -44,11 +44,19 @@ class AlpacaAdapter(BrokerAdapter):
             })
         else:
             broker_order = response.json()
-            await update_callback({
+            status = OrderStatus.PLACED
+            if broker_order.get("status") == "filled":
+                status = OrderStatus.EXECUTED
+
+            update_data = {
                 "order_id": order.order_id,
-                "status": OrderStatus.PLACED,
+                "status": status,
                 "broker_order_id": broker_order["id"],
-            })
+            }
+            if broker_order.get("filled_at"):
+                update_data["executed_at"] = broker_order["filled_at"]
+
+            await update_callback(update_data)
 
     async def _make_order_request(self, order: Order) -> Optional[httpx.Response]:
         """
@@ -108,12 +116,20 @@ class AlpacaAdapter(BrokerAdapter):
                 }
 
             broker_order = response.json()
-            return {
-                "status": OrderStatus.PLACED,
+            status = OrderStatus.PLACED
+            if broker_order.get("status") == "filled":
+                status = OrderStatus.EXECUTED
+
+            result = {
+                "status": status,
                 "broker_order_id": broker_order["id"],
                 "symbol": trade_order.symbol,
                 "side": trade_order.side
             }
+            if broker_order.get("filled_at"):
+                result["executed_at"] = broker_order["filled_at"]
+
+            return result
         except httpx.RequestError as e:
             logger.error("Failed to send request to Alpaca.", extra={"error": str(e)})
             return {
