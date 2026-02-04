@@ -110,7 +110,7 @@ async def create_order(
     Primary endpoint for creating and executing trade orders.
     /execute_trade is provided as an alias for backward compatibility.
     """
-    order_request.client_order_id = idempotency_key or order_request.client_order_id
+    order_request.trade_id = idempotency_key or order_request.trade_id
     order = await service.create_order(order_request)
     if order.status == OrderStatus.PENDING:
         background_tasks.add_task(service.start_order_execution, order)

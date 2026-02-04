@@ -1,7 +1,8 @@
 from abc import ABC, abstractmethod
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Union
 import httpx
 import asyncio
+from fastapi import HTTPException
 from fastapi.encoders import jsonable_encoder
 from app.models import Order, CreateOrderRequest
 from app.config import settings
@@ -17,7 +18,7 @@ class DatabaseClient(ABC):
     async def create_order(self, order_data: CreateOrderRequest) -> Order: ...
 
     @abstractmethod
-    async def get_order_by_client_id(self, client_order_id: str) -> Optional[Order]: ...
+    async def get_order_by_trade_id(self, trade_id: Union[int, str]) -> Optional[Order]: ...
 
     @abstractmethod
     async def get_order_by_order_id(self, order_id: int) -> Optional[Order]: ...
@@ -35,18 +36,25 @@ class HttpDatabaseClient(DatabaseClient):
 
     async def create_order(self, order_data: CreateOrderRequest) -> Order:
         async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.post(
-                f"{self.base_url}/orders",
-                json=order_data.model_dump(),
-                headers={"X-API-KEY": settings.API_KEY}
-            )
-            response.raise_for_status()
+            try:
+                response = await client.post(
+                    f"{self.base_url}/accounts/{order_data.account_id}/orders",
+                    json=jsonable_encoder(order_data),
+                    headers={"X-API-KEY": settings.API_KEY}
+                )
+                response.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 404:
+                    raise HTTPException(status_code=404, detail=f"Database Agent: Account {order_data.account_id} not found.")
+                elif e.response.status_code == 422:
+                    raise HTTPException(status_code=422, detail=f"Database Agent: Validation error: {e.response.text}")
+                raise
             return Order.model_validate(response.json())
 
-    async def get_order_by_client_id(self, client_order_id: str) -> Optional[Order]:
+    async def get_order_by_trade_id(self, trade_id: Union[int, str]) -> Optional[Order]:
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.get(
-                f"{self.base_url}/orders/client/{client_order_id}",
+                f"{self.base_url}/orders/trade/{trade_id}",
                 headers={"X-API-KEY": settings.API_KEY}
             )
             if response.status_code == 404:
@@ -81,15 +89,15 @@ class InMemoryDatabaseClient(DatabaseClient):
     This class is thread-safe to handle concurrent requests.
     """
     def __init__(self):
-        self._orders_by_client_id: Dict[str, Order] = {}
+        self._orders_by_trade_id: Dict[Union[int, str], Order] = {}
         self._orders_by_order_id: Dict[int, Order] = {}
         self._id_seq = 1
         self._lock = asyncio.Lock()
 
     async def create_order(self, order_data: CreateOrderRequest) -> Order:
         async with self._lock:
-            if order_data.client_order_id in self._orders_by_client_id:
-                raise ValueError("Duplicate client_order_id")
+            if order_data.trade_id in self._orders_by_trade_id:
+                raise ValueError("Duplicate trade_id")
 
             order_id = self._id_seq
             self._id_seq += 1
@@ -99,13 +107,13 @@ class InMemoryDatabaseClient(DatabaseClient):
                 **order_data.model_dump()
             )
 
-            self._orders_by_client_id[new_order.client_order_id] = new_order
+            self._orders_by_trade_id[new_order.trade_id] = new_order
             self._orders_by_order_id[order_id] = new_order
             return new_order.model_copy()
 
-    async def get_order_by_client_id(self, client_order_id: str) -> Optional[Order]:
+    async def get_order_by_trade_id(self, trade_id: Union[int, str]) -> Optional[Order]:
         async with self._lock:
-            order = self._orders_by_client_id.get(client_order_id)
+            order = self._orders_by_trade_id.get(trade_id)
             return order.model_copy() if order else None
 
     async def get_order_by_order_id(self, order_id: int) -> Optional[Order]:
@@ -122,7 +130,7 @@ class InMemoryDatabaseClient(DatabaseClient):
             updated_order = stored_order.model_copy(update=updates)
 
             self._orders_by_order_id[order_id] = updated_order
-            self._orders_by_client_id[updated_order.client_order_id] = updated_order
+            self._orders_by_trade_id[updated_order.trade_id] = updated_order
 
             return updated_order.model_copy()
 

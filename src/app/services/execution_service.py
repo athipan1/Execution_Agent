@@ -19,18 +19,18 @@ class ExecutionService:
         """
         Creates a new order, ensuring idempotency.
         """
-        existing_order = await self.db_client.get_order_by_client_id(order_request.client_order_id)
+        existing_order = await self.db_client.get_order_by_trade_id(order_request.trade_id)
         if existing_order:
             logger.info(
                 "Idempotent request received for existing order.",
-                extra={"client_order_id": order_request.client_order_id, "order_id": existing_order.order_id}
+                extra={"trade_id": order_request.trade_id, "order_id": existing_order.order_id}
             )
             return existing_order
 
         new_order = await self.db_client.create_order(order_request)
         logger.info(
             "New order created in pending state.",
-            extra={"client_order_id": new_order.client_order_id, "order_id": new_order.order_id}
+            extra={"trade_id": new_order.trade_id, "order_id": new_order.order_id}
         )
         return new_order
 

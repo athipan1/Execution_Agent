@@ -14,7 +14,7 @@ def simulator():
 def base_order():
     return Order(
         order_id=1,
-        client_order_id="test-client-id",
+        trade_id="test-client-id",
         account_id=123,
         symbol="TEST.BK",
         side=OrderSide.BUY,

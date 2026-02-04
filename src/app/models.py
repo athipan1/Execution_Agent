@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field, ConfigDict
-from typing import Optional, Any, Generic, TypeVar
+from typing import Optional, Any, Generic, TypeVar, Union
 from enum import Enum
 from datetime import datetime, timezone
 import uuid
@@ -28,8 +28,8 @@ class OrderStatus(str, Enum):
 # --- API Models ---
 
 class CreateOrderRequest(BaseModel):
-    client_order_id: str = Field(..., description="Globally unique client order ID")
-    account_id: int
+    trade_id: Union[int, str] = Field(..., description="Globally unique trade ID")
+    account_id: Union[int, str]
     symbol: str
     side: OrderSide
     order_type: OrderType
@@ -38,7 +38,7 @@ class CreateOrderRequest(BaseModel):
     time_in_force: TimeInForce = TimeInForce.GTC
 
 class TradeOrder(BaseModel):
-    client_order_id: str
+    trade_id: Union[int, str]
     symbol: str
     quantity: int
     side: OrderSide
@@ -48,8 +48,8 @@ class OrderResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     order_id: int
-    client_order_id: str
-    account_id: int
+    trade_id: Union[int, str]
+    account_id: Union[int, str]
     symbol: str
     side: OrderSide
     order_type: OrderType
@@ -104,8 +104,8 @@ class Order(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     order_id: int
-    client_order_id: str
-    account_id: int
+    trade_id: Union[int, str]
+    account_id: Union[int, str]
     symbol: str
     side: OrderSide
     order_type: OrderType

@@ -30,8 +30,8 @@ def test_health_check(client: TestClient):
     assert data["data"]["status"] == "healthy"
 
 def test_create_order_and_get_status(client: TestClient):
-    client_order_id = str(uuid.uuid4())
-    order_data = {**BASE_ORDER, "client_order_id": client_order_id}
+    trade_id = str(uuid.uuid4())
+    order_data = {**BASE_ORDER, "trade_id": trade_id}
 
     response = client.post("/execute", headers=HEADERS, json=order_data)
     assert response.status_code == 200
@@ -53,8 +53,8 @@ def test_create_order_and_get_status(client: TestClient):
         pytest.fail("Order did not reach 'executed' status in time.")
 
 def test_create_failed_order(client: TestClient):
-    client_order_id = str(uuid.uuid4())
-    order_data = {**BASE_ORDER, "client_order_id": client_order_id, "symbol": "FAIL.BK"}
+    trade_id = str(uuid.uuid4())
+    order_data = {**BASE_ORDER, "trade_id": trade_id, "symbol": "FAIL.BK"}
 
     response = client.post("/execute", headers=HEADERS, json=order_data)
     assert response.status_code == 200
