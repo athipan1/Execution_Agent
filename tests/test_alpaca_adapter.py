@@ -22,7 +22,7 @@ def alpaca_adapter():
 def sample_order():
     return Order(
         order_id=1,
-        client_order_id="test-order-123",
+        trade_id="test-order-123",
         account_id=100,
         symbol="AAPL",
         side=OrderSide.BUY,

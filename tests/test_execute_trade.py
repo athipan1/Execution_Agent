@@ -15,9 +15,9 @@ API_KEY = settings.API_KEY
 HEADERS = {"X-API-KEY": API_KEY}
 
 def test_execute_trade_success(client: TestClient):
-    client_order_id = str(uuid.uuid4())
+    trade_id = str(uuid.uuid4())
     trade_data = {
-        "client_order_id": client_order_id,
+        "trade_id": trade_id,
         "account_id": 1,
         "symbol": "AAPL",
         "quantity": 10,
@@ -43,9 +43,9 @@ def test_execute_trade_success(client: TestClient):
         pytest.fail("Order did not reach 'executed' status")
 
 def test_execute_trade_fail(client: TestClient):
-    client_order_id = str(uuid.uuid4())
+    trade_id = str(uuid.uuid4())
     trade_data = {
-        "client_order_id": client_order_id,
+        "trade_id": trade_id,
         "account_id": 1,
         "symbol": "FAIL.BK",
         "quantity": 10,
@@ -70,7 +70,7 @@ def test_execute_trade_fail(client: TestClient):
 
 def test_execute_trade_unauthorized(client: TestClient):
     trade_data = {
-        "client_order_id": "some-id",
+        "trade_id": "some-id",
         "account_id": 1,
         "symbol": "AAPL",
         "quantity": 10,

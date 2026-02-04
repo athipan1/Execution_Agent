@@ -12,7 +12,7 @@ def client():
 
 def test_standard_response_success_format(client):
     trade_data = {
-        "client_order_id": "standard-test-id",
+        "trade_id": "standard-test-id",
         "account_id": 1,
         "symbol": "AAPL",
         "quantity": 10,
@@ -40,7 +40,7 @@ def test_standard_response_success_format(client):
     # Verify expanded OrderResponse fields
     order_data = json_data["data"]
     expected_fields = [
-        "order_id", "client_order_id", "account_id", "symbol", "side",
+        "order_id", "trade_id", "account_id", "symbol", "side",
         "order_type", "price", "quantity", "time_in_force", "status",
         "broker_order_id", "reason", "executed_quantity",
         "avg_execution_price", "executed_at"

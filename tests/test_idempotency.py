@@ -20,13 +20,13 @@ BASE_ORDER = {
     "quantity": 50,
 }
 
-def test_idempotency_with_client_order_id(client: TestClient):
+def test_idempotency_with_trade_id(client: TestClient):
     """
-    Verifies that duplicate requests using the same client_order_id
+    Verifies that duplicate requests using the same trade_id
     do not create a new order and instead return the existing one.
     """
-    client_order_id = str(uuid.uuid4())
-    order_data = {**BASE_ORDER, "client_order_id": client_order_id}
+    trade_id = str(uuid.uuid4())
+    order_data = {**BASE_ORDER, "trade_id": trade_id}
 
     response1 = client.post("/execute", headers=HEADERS, json=order_data)
     assert response1.status_code == 200
@@ -38,7 +38,7 @@ def test_idempotency_with_client_order_id(client: TestClient):
     order2 = response2.json()["data"]
 
     assert order1["order_id"] == order2["order_id"]
-    assert order1["client_order_id"] == order2["client_order_id"]
+    assert order1["trade_id"] == order2["trade_id"]
     assert order2["status"] != "pending"
 
 def test_idempotency_with_header(client: TestClient):
@@ -48,17 +48,17 @@ def test_idempotency_with_header(client: TestClient):
     idempotency_key = str(uuid.uuid4())
     custom_headers = {**HEADERS, "Idempotency-Key": idempotency_key}
 
-    order_data1 = {**BASE_ORDER, "client_order_id": str(uuid.uuid4())}
-    order_data2 = {**BASE_ORDER, "client_order_id": str(uuid.uuid4())}
+    order_data1 = {**BASE_ORDER, "trade_id": str(uuid.uuid4())}
+    order_data2 = {**BASE_ORDER, "trade_id": str(uuid.uuid4())}
 
     response1 = client.post("/execute", headers=custom_headers, json=order_data1)
     assert response1.status_code == 200
     order1 = response1.json()["data"]
-    assert order1["client_order_id"] == idempotency_key
+    assert order1["trade_id"] == idempotency_key
 
     response2 = client.post("/execute", headers=custom_headers, json=order_data2)
     assert response2.status_code == 200
     order2 = response2.json()["data"]
 
     assert order1["order_id"] == order2["order_id"]
-    assert order2["client_order_id"] == idempotency_key
+    assert order2["trade_id"] == idempotency_key
