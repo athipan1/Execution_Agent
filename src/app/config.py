@@ -3,7 +3,7 @@ from typing import Optional
 
 class Settings(BaseSettings):
     API_KEY: str = "default_api_key"  # Default value for development
-    DB_MODE: str = "memory"
+    DB_MODE: str = "agent"
     DB_AGENT_URL: Optional[str] = None
 
     # Broker configuration

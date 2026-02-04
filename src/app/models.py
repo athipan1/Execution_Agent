@@ -63,6 +63,25 @@ class OrderResponse(BaseModel):
     avg_execution_price: Optional[float] = None
     executed_at: Optional[datetime] = None
 
+class CreateOrderResponse(OrderResponse):
+    """Alias for OrderResponse to match central contract naming."""
+    pass
+
+class ExecutionResult(BaseModel):
+    status: OrderStatus
+    broker_order_id: Optional[str] = None
+    symbol: str
+    side: OrderSide
+    quantity: int
+    avg_execution_price: Optional[float] = None
+    executed_at: Optional[datetime] = None
+    reason: Optional[str] = None
+
+class HealthResponse(BaseModel):
+    status: str
+    broker_connected: bool
+    mode: str
+
 # --- Standard Response Models ---
 
 class ErrorDetail(BaseModel):
@@ -74,10 +93,10 @@ T = TypeVar("T")
 class StandardAgentResponse(BaseModel, Generic[T]):
     status: str  # "success" or "error"
     agent_type: str = "execution"
-    version: str = "1.0"
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     data: Optional[T] = None
     error: Optional[dict] = None
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    confidence_score: Optional[float] = None
 
 # --- Internal Models ---
 

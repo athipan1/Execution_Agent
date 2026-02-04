@@ -131,10 +131,10 @@ _db_client_instance = None
 def get_db_client() -> DatabaseClient:
     global _db_client_instance
     if _db_client_instance is None:
-        if settings.DB_MODE == "agent" and settings.DB_AGENT_URL:
+        if settings.DB_AGENT_URL:
             logger.info(f"Using HttpDatabaseClient with URL: {settings.DB_AGENT_URL}")
             _db_client_instance = HttpDatabaseClient(settings.DB_AGENT_URL)
         else:
-            logger.info("Using InMemoryDatabaseClient")
+            logger.warning("DB_AGENT_URL not set. Falling back to InMemoryDatabaseClient (not recommended for production).")
             _db_client_instance = InMemoryDatabaseClient()
     return _db_client_instance
