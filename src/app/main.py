@@ -4,8 +4,8 @@ from fastapi.responses import JSONResponse
 from typing import Optional, Any
 
 from app.models import (
-    CreateOrderRequest, OrderResponse, Order, OrderStatus,
-    StandardAgentResponse, ErrorDetail
+    CreateOrderRequest, OrderResponse, CreateOrderResponse, Order, OrderStatus,
+    StandardAgentResponse, ErrorDetail, ExecutionResult, HealthResponse
 )
 from app.services.execution_service import ExecutionService
 from app.db_client import get_db_client, DatabaseClient
@@ -89,13 +89,17 @@ async def generic_exception_handler(request: Request, exc: Exception):
         ).model_dump(mode="json")
     )
 
-def wrap_success(data: Any) -> StandardAgentResponse:
-    return StandardAgentResponse(status="success", data=data)
+def wrap_success(data: Any, confidence_score: float = 1.0) -> StandardAgentResponse[Any]:
+    return StandardAgentResponse(
+        status="success",
+        data=data,
+        confidence_score=confidence_score
+    )
 
 # --- API Endpoints ---
 
-@app.post("/execute", response_model=StandardAgentResponse[OrderResponse], status_code=200)
-@app.post("/execute_trade", response_model=StandardAgentResponse[OrderResponse], status_code=200, include_in_schema=False)
+@app.post("/execute", response_model=StandardAgentResponse[CreateOrderResponse], status_code=200)
+@app.post("/execute_trade", response_model=StandardAgentResponse[CreateOrderResponse], status_code=200, include_in_schema=False)
 async def create_order(
     order_request: CreateOrderRequest,
     background_tasks: BackgroundTasks,
@@ -111,8 +115,8 @@ async def create_order(
     if order.status == OrderStatus.PENDING:
         background_tasks.add_task(service.start_order_execution, order)
 
-    # Explicitly return OrderResponse to match Manager schema
-    return wrap_success(OrderResponse.model_validate(order))
+    # Explicitly return CreateOrderResponse to match Manager schema
+    return wrap_success(CreateOrderResponse.model_validate(order))
 
 @app.get("/execute/{order_id}", response_model=StandardAgentResponse[Order])
 async def get_order(order_id: int, db_client: DatabaseClient = Depends(get_db_client)):
@@ -144,16 +148,16 @@ def get_alpaca_adapter() -> AlpacaAdapter:
 
 # Health check endpoints
 
-@app.get("/health", response_model=StandardAgentResponse[dict])
+@app.get("/health", response_model=StandardAgentResponse[HealthResponse])
 async def health_check(adapter: BrokerAdapter = Depends(get_broker_adapter)):
     broker_connected = await adapter.check_connection()
-    return wrap_success({
-        "status": "healthy" if broker_connected else "degraded",
-        "broker_connected": broker_connected,
-        "mode": settings.BROKER_MODE
-    })
+    return wrap_success(HealthResponse(
+        status="healthy" if broker_connected else "degraded",
+        broker_connected=broker_connected,
+        mode=settings.BROKER_MODE
+    ))
 
-@app.get("/health/alpaca", response_model=StandardAgentResponse[dict])
+@app.get("/health/alpaca", response_model=StandardAgentResponse[HealthResponse])
 async def health_check_alpaca(adapter: AlpacaAdapter = Depends(get_alpaca_adapter)):
     """Checks the connection to the Alpaca API."""
     connected = await adapter.check_connection()
@@ -162,8 +166,8 @@ async def health_check_alpaca(adapter: AlpacaAdapter = Depends(get_alpaca_adapte
             status_code=503,
             detail="Could not connect to Alpaca.",
         )
-    return wrap_success({
-        "status": "healthy",
-        "broker_connected": True,
-        "mode": "ALPACA"
-    })
+    return wrap_success(HealthResponse(
+        status="healthy",
+        broker_connected=True,
+        mode="ALPACA"
+    ))
