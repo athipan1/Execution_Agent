@@ -119,18 +119,26 @@ async def create_order(
     return wrap_success(CreateOrderResponse.model_validate(order))
 
 @app.get("/execute/{order_id}", response_model=StandardAgentResponse[Order])
-async def get_order(order_id: int, db_client: DatabaseClient = Depends(get_db_client)):
-    order = await db_client.get_order_by_order_id(order_id)
+async def get_order(order_id: int, service: ExecutionService = Depends(get_execution_service)):
+    """
+    Retrieves the order details. Automatically refreshes status from broker
+    if the order is still in progress.
+    """
+    order = await service.refresh_order_status(order_id)
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     return wrap_success(order)
 
 @app.post("/execute/{order_id}/cancel", response_model=StandardAgentResponse[Order])
 async def cancel_order(order_id: int, service: ExecutionService = Depends(get_execution_service)):
+    """
+    Cancels an order at the broker and updates the local state.
+    """
     order = await service.db_client.get_order_by_order_id(order_id)
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
-    if order.status not in [OrderStatus.PLACED, OrderStatus.PARTIALLY_FILLED]:
+
+    if order.status in [OrderStatus.EXECUTED, OrderStatus.FAILED, OrderStatus.CANCELLED]:
         raise HTTPException(status_code=400, detail=f"Order in state '{order.status}' cannot be cancelled.")
 
     if order.broker_order_id:
@@ -138,8 +146,11 @@ async def cancel_order(order_id: int, service: ExecutionService = Depends(get_ex
         if cancellation_result.get("status") == OrderStatus.CANCELLED:
             updated_order = await service.db_client.update_order(order_id, {"status": OrderStatus.CANCELLED})
             return wrap_success(updated_order)
+        else:
+            detail = cancellation_result.get("message", "Broker failed to cancel the order.")
+            raise HTTPException(status_code=500, detail=detail)
 
-    raise HTTPException(status_code=500, detail="Broker failed to cancel the order.")
+    raise HTTPException(status_code=400, detail="Order has no broker ID and cannot be cancelled.")
 
 def get_alpaca_adapter() -> AlpacaAdapter:
     """Dependency injector for the AlpacaAdapter."""

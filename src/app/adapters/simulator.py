@@ -94,10 +94,18 @@ class SimulatorAdapter(BrokerAdapter):
         return {"status": OrderStatus.CANCELLED}
 
     async def get_order_status(self, broker_order_id: str) -> dict:
-        # This would require the simulator to maintain state, which is out of scope
-        # for this simple implementation. The primary update mechanism is the callback.
-        # We return a placeholder response.
-        return {"status": OrderStatus.PLACED, "executed_quantity": 0}
+        """
+        Returns a simulated status update.
+        """
+        # For simplicity, we just return 'executed' if it's a 'sim-' ID
+        # In a real test, we might want to vary this.
+        return {
+            "status": OrderStatus.EXECUTED,
+            "broker_order_id": broker_order_id,
+            "executed_quantity": 100, # Assuming 100 for simplicity
+            "avg_execution_price": 100.0,
+            "executed_at": datetime.now(timezone.utc)
+        }
 
     async def execute(self, trade_order: TradeOrder) -> Dict[str, Any]:
         """

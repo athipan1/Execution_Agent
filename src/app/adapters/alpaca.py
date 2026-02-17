@@ -44,18 +44,8 @@ class AlpacaAdapter(BrokerAdapter):
             })
         else:
             broker_order = response.json()
-            status = OrderStatus.PLACED
-            if broker_order.get("status") == "filled":
-                status = OrderStatus.EXECUTED
-
-            update_data = {
-                "order_id": order.order_id,
-                "status": status,
-                "broker_order_id": broker_order["id"],
-            }
-            if broker_order.get("filled_at"):
-                update_data["executed_at"] = broker_order["filled_at"]
-
+            update_data = self._map_alpaca_order_to_internal(broker_order)
+            update_data["order_id"] = order.order_id
             await update_callback(update_data)
 
     async def _make_order_request(self, order: Order) -> Optional[httpx.Response]:
@@ -69,9 +59,13 @@ class AlpacaAdapter(BrokerAdapter):
             "side": order.side.value,
             "symbol": order.symbol,
             "qty": str(order.quantity),
-            "type": "market",
-            "time_in_force": "gtc",
+            "type": order.order_type.value,
+            "time_in_force": order.time_in_force.value.lower(),
         }
+
+        if order.order_type == "limit" and order.price:
+            payload["limit_price"] = str(order.price)
+
         # Use the v2 endpoint for placing orders
         url = f"{settings.ALPACA_API_URL}/v2/orders"
 
@@ -83,12 +77,79 @@ class AlpacaAdapter(BrokerAdapter):
             return None
 
     async def cancel_order(self, broker_order_id: str) -> dict:
-        # Placeholder implementation
-        return {"status": "error", "message": "Not implemented"}
+        """
+        Cancels a live order at Alpaca.
+        """
+        headers = self._get_auth_headers()
+        url = f"{settings.ALPACA_API_URL}/v2/orders/{broker_order_id}"
+
+        try:
+            response = await self._client.delete(url, headers=headers)
+            if response.status_code == 204:
+                return {"status": OrderStatus.CANCELLED}
+            else:
+                logger.error(
+                    "Failed to cancel Alpaca order.",
+                    extra={"broker_order_id": broker_order_id, "status_code": response.status_code, "response": response.text}
+                )
+                return {"status": "error", "message": f"Alpaca API error: {response.text}"}
+        except httpx.RequestError as e:
+            logger.error("Request error while cancelling Alpaca order.", extra={"error": str(e)})
+            return {"status": "error", "message": str(e)}
 
     async def get_order_status(self, broker_order_id: str) -> dict:
-        # Placeholder implementation
-        return {"status": "error", "message": "Not implemented"}
+        """
+        Retrieves the current status of an order from Alpaca.
+        """
+        headers = self._get_auth_headers()
+        url = f"{settings.ALPACA_API_URL}/v2/orders/{broker_order_id}"
+
+        try:
+            response = await self._client.get(url, headers=headers)
+            if response.is_error:
+                return {"status": "error", "message": f"Alpaca API error: {response.text}"}
+
+            broker_order = response.json()
+            return self._map_alpaca_order_to_internal(broker_order)
+        except httpx.RequestError as e:
+            logger.error("Request error while fetching Alpaca order status.", extra={"error": str(e)})
+            return {"status": "error", "message": str(e)}
+
+    def _map_alpaca_order_to_internal(self, alpaca_order: dict) -> dict:
+        """
+        Maps Alpaca order response to internal order status and fields.
+        """
+        status_map = {
+            "new": OrderStatus.PLACED,
+            "accepted": OrderStatus.PLACED,
+            "partially_filled": OrderStatus.PARTIALLY_FILLED,
+            "filled": OrderStatus.EXECUTED,
+            "canceled": OrderStatus.CANCELLED,
+            "expired": OrderStatus.FAILED,
+            "rejected": OrderStatus.FAILED,
+            "pending_cancel": OrderStatus.PLACED,
+            "pending_replace": OrderStatus.PLACED,
+        }
+
+        alpaca_status = alpaca_order.get("status")
+        internal_status = status_map.get(alpaca_status, OrderStatus.FAILED)
+
+        update_data = {
+            "status": internal_status,
+            "broker_order_id": alpaca_order["id"],
+            "executed_quantity": int(alpaca_order.get("filled_qty", 0)),
+        }
+
+        if alpaca_order.get("filled_avg_price"):
+            update_data["avg_execution_price"] = float(alpaca_order["filled_avg_price"])
+
+        if alpaca_order.get("filled_at"):
+            update_data["executed_at"] = alpaca_order["filled_at"]
+
+        if alpaca_status == "rejected":
+            update_data["reason"] = f"Alpaca rejection: {alpaca_order.get('failed_reason', 'Unknown reason')}"
+
+        return update_data
 
     async def execute(self, trade_order: TradeOrder) -> Dict[str, Any]:
         """
@@ -102,7 +163,7 @@ class AlpacaAdapter(BrokerAdapter):
             "symbol": trade_order.symbol,
             "qty": str(trade_order.quantity),
             "type": trade_order.order_type.value,
-            "time_in_force": "gtc",
+            "time_in_force": "gtc", # Defaulting to gtc for direct execute unless TradeOrder supports it
         }
         url = f"{settings.ALPACA_API_URL}/v2/orders"
 
@@ -116,20 +177,7 @@ class AlpacaAdapter(BrokerAdapter):
                 }
 
             broker_order = response.json()
-            status = OrderStatus.PLACED
-            if broker_order.get("status") == "filled":
-                status = OrderStatus.EXECUTED
-
-            result = {
-                "status": status,
-                "broker_order_id": broker_order["id"],
-                "symbol": trade_order.symbol,
-                "side": trade_order.side
-            }
-            if broker_order.get("filled_at"):
-                result["executed_at"] = broker_order["filled_at"]
-
-            return result
+            return self._map_alpaca_order_to_internal(broker_order)
         except httpx.RequestError as e:
             logger.error("Failed to send request to Alpaca.", extra={"error": str(e)})
             return {

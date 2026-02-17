@@ -50,6 +50,29 @@ class ExecutionService:
         )
         await self.db_client.update_order(order_id, updates)
 
+    async def refresh_order_status(self, order_id: int) -> Order:
+        """
+        Fetches the latest status from the broker and updates the database.
+        """
+        order = await self.db_client.get_order_by_order_id(order_id)
+        if not order:
+            return None
+
+        if not order.broker_order_id:
+            return order
+
+        # Only refresh if not in a final state
+        if order.status in [OrderStatus.EXECUTED, OrderStatus.FAILED, OrderStatus.CANCELLED]:
+            return order
+
+        updates = await self.broker_adapter.get_order_status(order.broker_order_id)
+        if updates.get("status") != "error":
+            updates["order_id"] = order_id
+            await self._handle_broker_updates(updates)
+            return await self.db_client.get_order_by_order_id(order_id)
+
+        return order
+
     async def start_order_execution(self, order: Order):
         """
         Initiates the actual order execution with the broker adapter.
