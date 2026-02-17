@@ -78,6 +78,7 @@ async def test_place_order_success(alpaca_adapter, sample_order):
         "order_id": sample_order.order_id,
         "status": OrderStatus.PLACED,
         "broker_order_id": "broker-order-id-123",
+        "executed_quantity": 0,
     })
 
 

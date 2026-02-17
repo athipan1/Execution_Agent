@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, model_validator
 from typing import Optional, Any, Generic, TypeVar, Union
 from enum import Enum
 from datetime import datetime, timezone
@@ -36,6 +36,12 @@ class CreateOrderRequest(BaseModel):
     price: Optional[float] = None
     quantity: int
     time_in_force: TimeInForce = TimeInForce.GTC
+
+    @model_validator(mode="after")
+    def validate_limit_price(self) -> "CreateOrderRequest":
+        if self.order_type == OrderType.LIMIT and self.price is None:
+            raise ValueError("Price is required for limit orders")
+        return self
 
 class TradeOrder(BaseModel):
     trade_id: Union[int, str]
