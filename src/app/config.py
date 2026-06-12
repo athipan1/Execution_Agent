@@ -2,12 +2,13 @@ from pydantic_settings import BaseSettings
 from typing import Optional
 
 class Settings(BaseSettings):
-    API_KEY: str = "default_api_key"  # Default value for development
+    API_KEY: str = "dev_execution_key"
+    DATABASE_AGENT_API_KEY: Optional[str] = None
     DB_MODE: str = "agent"
     DB_AGENT_URL: Optional[str] = None
 
     # Broker configuration
-    BROKER_MODE: str = "SIMULATOR"  # Can be "SIMULATOR" or "REAL"
+    BROKER_MODE: str = "SIMULATOR"  # Can be "SIMULATOR" or "ALPACA"
     BROKER_API_KEY: Optional[str] = None
     BROKER_API_SECRET: Optional[str] = None
 
