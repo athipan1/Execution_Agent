@@ -26,12 +26,12 @@ WORKDIR /home/appuser
 # Copy virtual environment from builder stage
 COPY --from=builder /opt/venv /opt/venv
 
-# Copy the application source code from the local 'src' directory into a 'src'
-# subdirectory in the container. This preserves the project's src layout.
+# Copy both layouts so the service works even when docker-compose overrides PYTHONPATH.
 COPY --chown=appuser:appgroup src/ ./src/
+COPY --chown=appuser:appgroup src/app/ ./app/
 
-# Set the PYTHONPATH to the 'src' directory.
-ENV PYTHONPATH=/home/appuser/src
+# Set a stable import path. Python also includes WORKDIR on sys.path.
+ENV PYTHONPATH=/home/appuser:/home/appuser/src
 ENV PORT=8006
 ENV HOME=/home/appuser
 
