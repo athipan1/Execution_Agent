@@ -33,6 +33,7 @@ COPY --chown=appuser:appgroup src/ ./src/
 # Set the PYTHONPATH to the 'src' directory.
 ENV PYTHONPATH=/home/appuser/src
 ENV PORT=8006
+ENV HOME=/home/appuser
 
 # Switch to the non-root user for security
 USER appuser
@@ -45,4 +46,4 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD curl -f http://localhost:8006/health || exit 1
 
 # Define the command to run the application.
-CMD ["/opt/venv/bin/gunicorn", "-k", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:8006", "src.app.main:app"]
+CMD ["/opt/venv/bin/gunicorn", "-k", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:8006", "app.main:app"]
