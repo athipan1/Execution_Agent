@@ -28,25 +28,21 @@ COPY --from=builder /opt/venv /opt/venv
 
 # Copy the application source code from the local 'src' directory into a 'src'
 # subdirectory in the container. This preserves the project's src layout.
-# The application code will be at /home/appuser/src/
 COPY --chown=appuser:appgroup src/ ./src/
 
-# Set the PYTHONPATH to the 'src' directory. This allows Python's import system
-# to find the 'app' module correctly (e.g., 'import app.main').
+# Set the PYTHONPATH to the 'src' directory.
 ENV PYTHONPATH=/home/appuser/src
+ENV PORT=8006
 
 # Switch to the non-root user for security
 USER appuser
 
-# Expose the application port
-EXPOSE 8005
+# Expose the application port used by Manager_Agent docker-compose.yml
+EXPOSE 8006
 
 # Add healthcheck for container monitoring
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD curl -f http://localhost:8005/health || exit 1
+  CMD curl -f http://localhost:8006/health || exit 1
 
 # Define the command to run the application.
-# Gunicorn looks for the module 'src.app.main' and the callable 'app' within it.
-# Because PYTHONPATH is set to /home/appuser/src, Python can resolve 'src.app.main'
-# to the file at /home/appuser/src/src/app/main.py.
-CMD ["/opt/venv/bin/gunicorn", "-k", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:8005", "src.app.main:app"]
+CMD ["/opt/venv/bin/gunicorn", "-k", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:8006", "src.app.main:app"]

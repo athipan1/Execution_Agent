@@ -34,13 +34,28 @@ class HttpDatabaseClient(DatabaseClient):
         self.base_url = base_url.rstrip("/")
         self.timeout = 10.0
 
+    def _headers(self) -> Dict[str, str]:
+        api_key = settings.DATABASE_AGENT_API_KEY or settings.API_KEY
+        return {"X-API-KEY": api_key}
+
+    def _unwrap_standard_response(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        if isinstance(payload, dict) and "status" in payload and "data" in payload:
+            if payload.get("status") == "error":
+                error = payload.get("error") or {}
+                raise HTTPException(
+                    status_code=502,
+                    detail=error.get("message") or "Database Agent returned an error."
+                )
+            return payload.get("data") or {}
+        return payload
+
     async def create_order(self, order_data: CreateOrderRequest) -> Order:
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             try:
                 response = await client.post(
                     f"{self.base_url}/accounts/{order_data.account_id}/orders",
                     json=jsonable_encoder(order_data),
-                    headers={"X-API-KEY": settings.API_KEY}
+                    headers=self._headers()
                 )
                 response.raise_for_status()
             except httpx.HTTPStatusError as e:
@@ -49,39 +64,39 @@ class HttpDatabaseClient(DatabaseClient):
                 elif e.response.status_code == 422:
                     raise HTTPException(status_code=422, detail=f"Database Agent: Validation error: {e.response.text}")
                 raise
-            return Order.model_validate(response.json())
+            return Order.model_validate(self._unwrap_standard_response(response.json()))
 
     async def get_order_by_trade_id(self, trade_id: Union[int, str]) -> Optional[Order]:
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.get(
                 f"{self.base_url}/orders/trade/{trade_id}",
-                headers={"X-API-KEY": settings.API_KEY}
+                headers=self._headers()
             )
             if response.status_code == 404:
                 return None
             response.raise_for_status()
-            return Order.model_validate(response.json())
+            return Order.model_validate(self._unwrap_standard_response(response.json()))
 
     async def get_order_by_order_id(self, order_id: int) -> Optional[Order]:
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.get(
                 f"{self.base_url}/orders/{order_id}",
-                headers={"X-API-KEY": settings.API_KEY}
+                headers=self._headers()
             )
             if response.status_code == 404:
                 return None
             response.raise_for_status()
-            return Order.model_validate(response.json())
+            return Order.model_validate(self._unwrap_standard_response(response.json()))
 
     async def update_order(self, order_id: int, updates: Dict[str, Any]) -> Order:
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.patch(
                 f"{self.base_url}/orders/{order_id}",
                 json=jsonable_encoder(updates),
-                headers={"X-API-KEY": settings.API_KEY}
+                headers=self._headers()
             )
             response.raise_for_status()
-            return Order.model_validate(response.json())
+            return Order.model_validate(self._unwrap_standard_response(response.json()))
 
 class InMemoryDatabaseClient(DatabaseClient):
     """
