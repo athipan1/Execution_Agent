@@ -1,7 +1,7 @@
 import uuid
 from fastapi import FastAPI, Depends, Header, Request, HTTPException, BackgroundTasks
 from fastapi.responses import JSONResponse
-from typing import Optional, Any
+from typing import Optional, Any, Dict, List
 
 from app.models import (
     CreateOrderRequest, OrderResponse, CreateOrderResponse, Order, OrderStatus,
@@ -115,7 +115,6 @@ async def create_order(
     if order.status == OrderStatus.PENDING:
         background_tasks.add_task(service.start_order_execution, order)
 
-    # Explicitly return CreateOrderResponse to match Manager schema
     return wrap_success(CreateOrderResponse.model_validate(order))
 
 @app.get("/execute/{order_id}", response_model=StandardAgentResponse[Order])
@@ -146,16 +145,44 @@ async def cancel_order(order_id: int, service: ExecutionService = Depends(get_ex
         if cancellation_result.get("status") == OrderStatus.CANCELLED:
             updated_order = await service.db_client.update_order(order_id, {"status": OrderStatus.CANCELLED})
             return wrap_success(updated_order)
-        else:
-            detail = cancellation_result.get("message", "Broker failed to cancel the order.")
-            raise HTTPException(status_code=500, detail=detail)
+        detail = cancellation_result.get("message", "Broker failed to cancel the order.")
+        raise HTTPException(status_code=500, detail=detail)
 
     raise HTTPException(status_code=400, detail="Order has no broker ID and cannot be cancelled.")
+
+@app.get("/account", response_model=StandardAgentResponse[Dict[str, Any]])
+async def get_account(adapter: BrokerAdapter = Depends(get_broker_adapter)):
+    """Returns broker account status, cash, equity, and buying power."""
+    return wrap_success(await adapter.get_account())
+
+@app.get("/positions", response_model=StandardAgentResponse[List[Dict[str, Any]]])
+async def get_positions(adapter: BrokerAdapter = Depends(get_broker_adapter)):
+    """Returns current broker positions."""
+    return wrap_success(await adapter.get_positions())
+
+@app.get("/orders/open", response_model=StandardAgentResponse[List[Dict[str, Any]]])
+async def get_open_orders(adapter: BrokerAdapter = Depends(get_broker_adapter)):
+    """Returns open broker orders."""
+    return wrap_success(await adapter.get_open_orders())
+
+@app.get("/portfolio", response_model=StandardAgentResponse[Dict[str, Any]])
+async def get_portfolio(adapter: BrokerAdapter = Depends(get_broker_adapter)):
+    """Returns account, positions, and open orders in one portfolio snapshot."""
+    account = await adapter.get_account()
+    positions = await adapter.get_positions()
+    open_orders = await adapter.get_open_orders()
+    return wrap_success({
+        "mode": settings.BROKER_MODE,
+        "account": account,
+        "positions": positions,
+        "open_orders": open_orders,
+        "position_count": len(positions),
+        "open_order_count": len(open_orders),
+    })
 
 def get_alpaca_adapter() -> AlpacaAdapter:
     """Dependency injector for the AlpacaAdapter."""
     return AlpacaAdapter()
-
 
 # Health check endpoints
 
