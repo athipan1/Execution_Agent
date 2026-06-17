@@ -1,5 +1,5 @@
 import httpx
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 from app.adapters.base import BrokerAdapter, StatusUpdateCallable
 from app.models import Order, OrderStatus, TradeOrder
@@ -11,26 +11,29 @@ logger = get_logger(__name__)
 
 class AlpacaAdapter(BrokerAdapter):
     """
-    Broker adapter for interacting with the Alpaca Broker API using API Keys.
+    Broker adapter for interacting with Alpaca Trading API using paper/live API keys.
     """
 
     def __init__(self):
-        self._client = httpx.AsyncClient()
+        self._client = httpx.AsyncClient(timeout=30.0)
         if not settings.ALPACA_API_KEY_ID or not settings.ALPACA_SECRET_KEY:
             logger.error("Alpaca API Key ID or Secret Key is not configured.")
             raise ValueError("ALPACA_API_KEY_ID and ALPACA_SECRET_KEY must be configured.")
 
     def _get_auth_headers(self) -> dict:
-        """Returns the authentication headers for Alpaca API requests."""
         return {
             "APCA-API-KEY-ID": settings.ALPACA_API_KEY_ID,
             "APCA-API-SECRET-KEY": settings.ALPACA_SECRET_KEY,
         }
 
+    async def _get_json(self, path: str) -> Any:
+        headers = self._get_auth_headers()
+        url = f"{settings.ALPACA_API_URL}{path}"
+        response = await self._client.get(url, headers=headers)
+        response.raise_for_status()
+        return response.json()
+
     async def place_order(self, order: Order, update_callback: StatusUpdateCallable):
-        """
-        Places a market order with Alpaca and handles the response.
-        """
         response = await self._make_order_request(order)
 
         if not response or response.is_error:
@@ -49,9 +52,6 @@ class AlpacaAdapter(BrokerAdapter):
             await update_callback(update_data)
 
     async def _make_order_request(self, order: Order) -> Optional[httpx.Response]:
-        """
-        Helper method to make the actual HTTP request to place an order.
-        """
         headers = self._get_auth_headers()
         headers["Content-Type"] = "application/json"
 
@@ -63,23 +63,18 @@ class AlpacaAdapter(BrokerAdapter):
             "time_in_force": order.time_in_force.value.lower(),
         }
 
-        if order.order_type == "limit" and order.price:
+        if order.order_type.value == "limit" and order.price:
             payload["limit_price"] = str(order.price)
 
-        # Use the v2 endpoint for placing orders
         url = f"{settings.ALPACA_API_URL}/v2/orders"
 
         try:
-            response = await self._client.post(url, headers=headers, json=payload)
-            return response
+            return await self._client.post(url, headers=headers, json=payload)
         except httpx.RequestError as e:
             logger.error("Failed to send request to Alpaca.", extra={"error": str(e)})
             return None
 
     async def cancel_order(self, broker_order_id: str) -> dict:
-        """
-        Cancels a live order at Alpaca.
-        """
         headers = self._get_auth_headers()
         url = f"{settings.ALPACA_API_URL}/v2/orders/{broker_order_id}"
 
@@ -87,20 +82,16 @@ class AlpacaAdapter(BrokerAdapter):
             response = await self._client.delete(url, headers=headers)
             if response.status_code == 204:
                 return {"status": OrderStatus.CANCELLED}
-            else:
-                logger.error(
-                    "Failed to cancel Alpaca order.",
-                    extra={"broker_order_id": broker_order_id, "status_code": response.status_code, "response": response.text}
-                )
-                return {"status": "error", "message": f"Alpaca API error: {response.text}"}
+            logger.error(
+                "Failed to cancel Alpaca order.",
+                extra={"broker_order_id": broker_order_id, "status_code": response.status_code, "response": response.text}
+            )
+            return {"status": "error", "message": f"Alpaca API error: {response.text}"}
         except httpx.RequestError as e:
             logger.error("Request error while cancelling Alpaca order.", extra={"error": str(e)})
             return {"status": "error", "message": str(e)}
 
     async def get_order_status(self, broker_order_id: str) -> dict:
-        """
-        Retrieves the current status of an order from Alpaca.
-        """
         headers = self._get_auth_headers()
         url = f"{settings.ALPACA_API_URL}/v2/orders/{broker_order_id}"
 
@@ -116,9 +107,6 @@ class AlpacaAdapter(BrokerAdapter):
             return {"status": "error", "message": str(e)}
 
     def _map_alpaca_order_to_internal(self, alpaca_order: dict) -> dict:
-        """
-        Maps Alpaca order response to internal order status and fields.
-        """
         status_map = {
             "new": OrderStatus.PLACED,
             "accepted": OrderStatus.PLACED,
@@ -137,7 +125,7 @@ class AlpacaAdapter(BrokerAdapter):
         update_data = {
             "status": internal_status,
             "broker_order_id": alpaca_order["id"],
-            "executed_quantity": int(alpaca_order.get("filled_qty", 0)),
+            "executed_quantity": int(float(alpaca_order.get("filled_qty", 0) or 0)),
         }
 
         if alpaca_order.get("filled_avg_price"):
@@ -146,15 +134,12 @@ class AlpacaAdapter(BrokerAdapter):
         if alpaca_order.get("filled_at"):
             update_data["executed_at"] = alpaca_order["filled_at"]
 
-        if alpaca_status == "rejected":
-            update_data["reason"] = f"Alpaca rejection: {alpaca_order.get('failed_reason', 'Unknown reason')}"
+        if alpaca_status in {"rejected", "expired"}:
+            update_data["reason"] = f"Alpaca {alpaca_status}: {alpaca_order.get('failed_reason', 'Unknown reason')}"
 
         return update_data
 
     async def execute(self, trade_order: TradeOrder) -> Dict[str, Any]:
-        """
-        Executes a trade directly with Alpaca.
-        """
         headers = self._get_auth_headers()
         headers["Content-Type"] = "application/json"
 
@@ -163,7 +148,7 @@ class AlpacaAdapter(BrokerAdapter):
             "symbol": trade_order.symbol,
             "qty": str(trade_order.quantity),
             "type": trade_order.order_type.value,
-            "time_in_force": "gtc", # Defaulting to gtc for direct execute unless TradeOrder supports it
+            "time_in_force": "gtc",
         }
         url = f"{settings.ALPACA_API_URL}/v2/orders"
 
@@ -185,18 +170,65 @@ class AlpacaAdapter(BrokerAdapter):
                 "reason": f"Request failed: {str(e)}"
             }
 
-    async def check_connection(self) -> bool:
-        """
-        Verifies the connection to Alpaca by making a request to the /v2/account endpoint.
-        Returns True if successful, False otherwise.
-        """
-        logger.info("Checking connection to Alpaca...")
-        headers = self._get_auth_headers()
-        url = f"{settings.ALPACA_API_URL}/v2/account"
+    async def get_account(self) -> Dict[str, Any]:
+        account = await self._get_json("/v2/account")
+        return {
+            "broker": "ALPACA",
+            "paper": "paper-api.alpaca.markets" in settings.ALPACA_API_URL,
+            "account_id": account.get("id"),
+            "status": account.get("status"),
+            "currency": account.get("currency"),
+            "cash": account.get("cash"),
+            "buying_power": account.get("buying_power"),
+            "equity": account.get("equity"),
+            "portfolio_value": account.get("portfolio_value"),
+            "pattern_day_trader": account.get("pattern_day_trader"),
+            "trading_blocked": account.get("trading_blocked"),
+            "transfers_blocked": account.get("transfers_blocked"),
+            "account_blocked": account.get("account_blocked"),
+        }
 
+    async def get_positions(self) -> List[Dict[str, Any]]:
+        positions = await self._get_json("/v2/positions")
+        return [
+            {
+                "symbol": item.get("symbol"),
+                "qty": item.get("qty"),
+                "side": item.get("side"),
+                "market_value": item.get("market_value"),
+                "avg_entry_price": item.get("avg_entry_price"),
+                "current_price": item.get("current_price"),
+                "unrealized_pl": item.get("unrealized_pl"),
+                "unrealized_plpc": item.get("unrealized_plpc"),
+                "asset_class": item.get("asset_class"),
+                "exchange": item.get("exchange"),
+            }
+            for item in positions
+        ]
+
+    async def get_open_orders(self) -> List[Dict[str, Any]]:
+        orders = await self._get_json("/v2/orders?status=open&limit=100")
+        return [
+            {
+                "id": item.get("id"),
+                "symbol": item.get("symbol"),
+                "side": item.get("side"),
+                "qty": item.get("qty"),
+                "filled_qty": item.get("filled_qty"),
+                "type": item.get("type"),
+                "time_in_force": item.get("time_in_force"),
+                "status": item.get("status"),
+                "submitted_at": item.get("submitted_at"),
+                "limit_price": item.get("limit_price"),
+                "stop_price": item.get("stop_price"),
+            }
+            for item in orders
+        ]
+
+    async def check_connection(self) -> bool:
+        logger.info("Checking connection to Alpaca...")
         try:
-            response = await self._client.get(url, headers=headers)
-            response.raise_for_status()
+            await self.get_account()
             logger.info("Alpaca connection check successful. Account details retrieved.")
             return True
         except httpx.RequestError as e:
