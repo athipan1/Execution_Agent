@@ -98,7 +98,8 @@ T = TypeVar("T")
 
 class StandardAgentResponse(BaseModel, Generic[T]):
     status: str  # "success" or "error"
-    agent_type: str = "execution"
+    agent_type: str = "execution-agent"
+    version: str = "1.0.0"
     data: Optional[T] = None
     error: Optional[dict] = None
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
