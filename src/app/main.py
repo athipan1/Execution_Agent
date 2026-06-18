@@ -160,9 +160,10 @@ async def get_positions(adapter: BrokerAdapter = Depends(get_broker_adapter)):
     """Returns current broker positions."""
     return wrap_success(await adapter.get_positions())
 
+@app.get("/orders", response_model=StandardAgentResponse[List[Dict[str, Any]]])
 @app.get("/orders/open", response_model=StandardAgentResponse[List[Dict[str, Any]]])
 async def get_open_orders(adapter: BrokerAdapter = Depends(get_broker_adapter)):
-    """Returns open broker orders."""
+    """Returns open broker orders. /orders is an alias for /orders/open."""
     return wrap_success(await adapter.get_open_orders())
 
 @app.get("/portfolio", response_model=StandardAgentResponse[Dict[str, Any]])
