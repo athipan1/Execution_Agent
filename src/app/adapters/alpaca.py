@@ -9,6 +9,14 @@ from app.logging import get_logger
 logger = get_logger(__name__)
 
 
+def _normalize_base_url(url: str) -> str:
+    """Return Alpaca API base URL without trailing slash or duplicate /v2."""
+    base_url = (url or "https://paper-api.alpaca.markets").rstrip("/")
+    if base_url.endswith("/v2"):
+        base_url = base_url[:-3]
+    return base_url
+
+
 class AlpacaAdapter(BrokerAdapter):
     """
     Broker adapter for interacting with Alpaca Trading API using paper/live API keys.
@@ -16,6 +24,7 @@ class AlpacaAdapter(BrokerAdapter):
 
     def __init__(self):
         self._client = httpx.AsyncClient(timeout=30.0)
+        self.base_url = _normalize_base_url(settings.ALPACA_API_URL)
         if not settings.ALPACA_API_KEY_ID or not settings.ALPACA_SECRET_KEY:
             logger.error("Alpaca API Key ID or Secret Key is not configured.")
             raise ValueError("ALPACA_API_KEY_ID and ALPACA_SECRET_KEY must be configured.")
@@ -26,10 +35,13 @@ class AlpacaAdapter(BrokerAdapter):
             "APCA-API-SECRET-KEY": settings.ALPACA_SECRET_KEY,
         }
 
+    def _url(self, path: str) -> str:
+        normalized_path = path if path.startswith("/") else f"/{path}"
+        return f"{self.base_url}{normalized_path}"
+
     async def _get_json(self, path: str) -> Any:
         headers = self._get_auth_headers()
-        url = f"{settings.ALPACA_API_URL}{path}"
-        response = await self._client.get(url, headers=headers)
+        response = await self._client.get(self._url(path), headers=headers)
         response.raise_for_status()
         return response.json()
 
@@ -66,20 +78,17 @@ class AlpacaAdapter(BrokerAdapter):
         if order.order_type.value == "limit" and order.price:
             payload["limit_price"] = str(order.price)
 
-        url = f"{settings.ALPACA_API_URL}/v2/orders"
-
         try:
-            return await self._client.post(url, headers=headers, json=payload)
+            return await self._client.post(self._url("/v2/orders"), headers=headers, json=payload)
         except httpx.RequestError as e:
             logger.error("Failed to send request to Alpaca.", extra={"error": str(e)})
             return None
 
     async def cancel_order(self, broker_order_id: str) -> dict:
         headers = self._get_auth_headers()
-        url = f"{settings.ALPACA_API_URL}/v2/orders/{broker_order_id}"
 
         try:
-            response = await self._client.delete(url, headers=headers)
+            response = await self._client.delete(self._url(f"/v2/orders/{broker_order_id}"), headers=headers)
             if response.status_code == 204:
                 return {"status": OrderStatus.CANCELLED}
             logger.error(
@@ -93,10 +102,9 @@ class AlpacaAdapter(BrokerAdapter):
 
     async def get_order_status(self, broker_order_id: str) -> dict:
         headers = self._get_auth_headers()
-        url = f"{settings.ALPACA_API_URL}/v2/orders/{broker_order_id}"
 
         try:
-            response = await self._client.get(url, headers=headers)
+            response = await self._client.get(self._url(f"/v2/orders/{broker_order_id}"), headers=headers)
             if response.is_error:
                 return {"status": "error", "message": f"Alpaca API error: {response.text}"}
 
@@ -150,10 +158,9 @@ class AlpacaAdapter(BrokerAdapter):
             "type": trade_order.order_type.value,
             "time_in_force": "gtc",
         }
-        url = f"{settings.ALPACA_API_URL}/v2/orders"
 
         try:
-            response = await self._client.post(url, headers=headers, json=payload)
+            response = await self._client.post(self._url("/v2/orders"), headers=headers, json=payload)
             if response.is_error:
                 return {
                     "status": OrderStatus.FAILED,
@@ -174,7 +181,7 @@ class AlpacaAdapter(BrokerAdapter):
         account = await self._get_json("/v2/account")
         return {
             "broker": "ALPACA",
-            "paper": "paper-api.alpaca.markets" in settings.ALPACA_API_URL,
+            "paper": "paper-api.alpaca.markets" in self.base_url,
             "account_id": account.get("id"),
             "status": account.get("status"),
             "currency": account.get("currency"),
