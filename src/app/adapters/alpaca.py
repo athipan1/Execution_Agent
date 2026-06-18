@@ -9,9 +9,15 @@ from app.logging import get_logger
 logger = get_logger(__name__)
 
 
+def _clean_secret(value: str | None) -> str:
+    """Remove accidental whitespace/newlines from secret values before using them in HTTP headers."""
+    return (value or "").strip()
+
+
 def _normalize_base_url(url: str) -> str:
     """Return Alpaca API base URL without trailing slash or duplicate /v2."""
-    base_url = (url or "https://paper-api.alpaca.markets").rstrip("/")
+    base_url = _clean_secret(url) or "https://paper-api.alpaca.markets"
+    base_url = base_url.rstrip("/")
     if base_url.endswith("/v2"):
         base_url = base_url[:-3]
     return base_url
@@ -25,14 +31,16 @@ class AlpacaAdapter(BrokerAdapter):
     def __init__(self):
         self._client = httpx.AsyncClient(timeout=30.0)
         self.base_url = _normalize_base_url(settings.ALPACA_API_URL)
-        if not settings.ALPACA_API_KEY_ID or not settings.ALPACA_SECRET_KEY:
+        self.api_key_id = _clean_secret(settings.ALPACA_API_KEY_ID)
+        self.secret_key = _clean_secret(settings.ALPACA_SECRET_KEY)
+        if not self.api_key_id or not self.secret_key:
             logger.error("Alpaca API Key ID or Secret Key is not configured.")
             raise ValueError("ALPACA_API_KEY_ID and ALPACA_SECRET_KEY must be configured.")
 
     def _get_auth_headers(self) -> dict:
         return {
-            "APCA-API-KEY-ID": settings.ALPACA_API_KEY_ID,
-            "APCA-API-SECRET-KEY": settings.ALPACA_SECRET_KEY,
+            "APCA-API-KEY-ID": self.api_key_id,
+            "APCA-API-SECRET-KEY": self.secret_key,
         }
 
     def _url(self, path: str) -> str:
