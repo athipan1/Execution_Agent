@@ -27,7 +27,8 @@ def test_standard_response_success_format(client):
 
     # Verify StandardAgentResponse structure
     assert json_data["status"] == "success"
-    assert json_data["agent_type"] == "execution"
+    assert json_data["agent_type"] == "execution-agent"
+    assert json_data["version"] == "1.0.0"
     assert "timestamp" in json_data
     assert json_data["error"] is None
 
@@ -57,6 +58,8 @@ def test_standard_response_error_format(client):
 
     # Verify StandardAgentResponse error structure
     assert json_data["status"] == "error"
+    assert json_data["agent_type"] == "execution-agent"
+    assert json_data["version"] == "1.0.0"
     assert isinstance(json_data["error"], dict)
     assert "code" in json_data["error"]
     assert "message" in json_data["error"]
