@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field, ConfigDict, model_validator
-from typing import Optional, Any, Generic, TypeVar, Union
+from typing import Optional, Any, Generic, TypeVar, Union, Dict
 from enum import Enum
 from datetime import datetime, timezone
 import uuid
@@ -37,10 +37,28 @@ class CreateOrderRequest(BaseModel):
     quantity: int
     time_in_force: TimeInForce = TimeInForce.GTC
 
+    # Required risk-gate fields. Execution_Agent is the final boundary before the broker.
+    risk_approval_id: str
+    final_quantity: int = Field(gt=0)
+    guard_plan: Optional[Dict[str, Any]] = None
+    protective_exit: Optional[Dict[str, Any]] = None
+
     @model_validator(mode="after")
     def validate_limit_price(self) -> "CreateOrderRequest":
         if self.order_type == OrderType.LIMIT and self.price is None:
             raise ValueError("Price is required for limit orders")
+        return self
+
+    @model_validator(mode="after")
+    def validate_risk_gate(self) -> "CreateOrderRequest":
+        if not str(self.risk_approval_id).strip():
+            raise ValueError("risk_approval_id is required")
+        if self.final_quantity <= 0:
+            raise ValueError("final_quantity must be greater than zero")
+        if self.quantity != self.final_quantity:
+            raise ValueError("quantity must match final_quantity approved by Risk_Agent")
+        if not self.guard_plan and not self.protective_exit:
+            raise ValueError("guard_plan or protective_exit is required")
         return self
 
 class TradeOrder(BaseModel):
