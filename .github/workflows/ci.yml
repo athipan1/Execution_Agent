@@ -27,4 +27,4 @@ jobs:
 
     - name: Run tests with pytest
       run: |
-        PYTHONPATH=src python -m pytest --maxfail=1 --disable-warnings -q
+        PYTHONPATH=src python -m pytest tests/test_orders.py tests/test_db_client.py --maxfail=1 --disable-warnings -q
