@@ -1,6 +1,5 @@
 import pytest
 from fastapi.testclient import TestClient
-from fastapi import HTTPException
 import time
 import uuid
 
@@ -20,7 +19,17 @@ BASE_ORDER = {
     "side": "buy",
     "order_type": "market",
     "quantity": 100,
+    "risk_approval_id": "risk-test-approval",
+    "final_quantity": 100,
+    "guard_plan": {
+        "symbol": "AOT.BK",
+        "side": "sell",
+        "quantity": 100,
+        "trigger_price": 95,
+        "time_in_force": "GTC",
+    },
 }
+
 
 def test_health_check(client: TestClient):
     response = client.get("/health")
@@ -28,6 +37,30 @@ def test_health_check(client: TestClient):
     data = response.json()
     assert data["status"] == "success"
     assert data["data"]["status"] == "healthy"
+
+
+def test_rejects_order_without_risk_gate(client: TestClient):
+    trade_id = str(uuid.uuid4())
+    order_data = {
+        "account_id": 1,
+        "symbol": "AOT.BK",
+        "side": "buy",
+        "order_type": "market",
+        "quantity": 100,
+        "trade_id": trade_id,
+    }
+
+    response = client.post("/execute", headers=HEADERS, json=order_data)
+    assert response.status_code == 422
+
+
+def test_rejects_quantity_that_differs_from_final_quantity(client: TestClient):
+    trade_id = str(uuid.uuid4())
+    order_data = {**BASE_ORDER, "trade_id": trade_id, "quantity": 200, "final_quantity": 100}
+
+    response = client.post("/execute", headers=HEADERS, json=order_data)
+    assert response.status_code == 422
+
 
 def test_create_order_and_get_status(client: TestClient):
     trade_id = str(uuid.uuid4())
@@ -52,9 +85,10 @@ def test_create_order_and_get_status(client: TestClient):
     else:
         pytest.fail("Order did not reach 'executed' status in time.")
 
+
 def test_create_failed_order(client: TestClient):
     trade_id = str(uuid.uuid4())
-    order_data = {**BASE_ORDER, "trade_id": trade_id, "symbol": "FAIL.BK"}
+    order_data = {**BASE_ORDER, "trade_id": trade_id, "symbol": "FAIL.BK", "guard_plan": {**BASE_ORDER["guard_plan"], "symbol": "FAIL.BK"}}
 
     response = client.post("/execute", headers=HEADERS, json=order_data)
     assert response.status_code == 200
@@ -67,10 +101,8 @@ def test_create_failed_order(client: TestClient):
     failed_order = response.json()["data"]
     assert failed_order["status"] == "failed"
 
+
 def test_unauthorized_access(client: TestClient):
-    """
-    Ensures that requests without a valid API key are rejected.
-    """
     response = client.post("/execute", headers={}, json=BASE_ORDER)
     assert response.status_code == 401
     data = response.json()
