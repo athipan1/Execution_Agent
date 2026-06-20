@@ -1,4 +1,4 @@
-from app.models import CreateOrderRequest, Order, OrderStatus
+from app.models import CreateOrderRequest, Order, OrderStatus, ExecutionJob, ExecutionJobStatus
 from app.db_client import DatabaseClient
 from app.adapters.base import BrokerAdapter
 from app.logging import get_logger
@@ -9,8 +9,8 @@ logger = get_logger(__name__)
 
 class ExecutionService:
     """
-    Orchestrates the order lifecycle, coordinating between the database
-    and the broker.
+    Orchestrates the order lifecycle, coordinating between the database,
+    durable execution jobs, and the broker.
     """
     def __init__(self, db_client: DatabaseClient, broker_adapter: BrokerAdapter):
         self.db_client = db_client
@@ -34,6 +34,20 @@ class ExecutionService:
             extra={"trade_id": new_order.trade_id, "order_id": new_order.order_id}
         )
         return new_order
+
+    async def enqueue_order_execution(self, order: Order) -> ExecutionJob:
+        """
+        Creates or returns a persisted execution job for an order.
+        """
+        job = await self.db_client.create_execution_job(order)
+        logger.info(
+            "Execution job enqueued.",
+            extra={"job_id": job.job_id, "order_id": job.order_id, "status": job.status}
+        )
+        return job
+
+    async def get_execution_job(self, job_id) -> Optional[ExecutionJob]:
+        return await self.db_client.get_execution_job(job_id)
 
     async def _handle_broker_updates(self, updates: Dict[str, Any]):
         """
@@ -76,7 +90,7 @@ class ExecutionService:
     async def start_order_execution(self, order: Order) -> Order:
         """
         Places a persisted pending order with the broker and returns the latest stored order.
-        This is awaited by the caller rather than scheduled as an in-process background task.
+        This is used by the durable worker, not by the request lifecycle.
         """
         logger.info(
             "Starting execution for order.",
@@ -91,4 +105,46 @@ class ExecutionService:
                 extra={"order_id": order.order_id, "error": str(e)},
                 exc_info=True
             )
-            return await self.db_client.update_order(order.order_id, {"status": OrderStatus.FAILED, "error_message": str(e)})
+            return await self.db_client.update_order(order.order_id, {"status": OrderStatus.FAILED, "reason": str(e)})
+
+    async def process_next_execution_job(self) -> Optional[ExecutionJob]:
+        """
+        Claims one queued job and processes it. This is safe to call from a worker loop
+        or from an admin endpoint.
+        """
+        job = await self.db_client.claim_next_execution_job()
+        if not job:
+            return None
+
+        order = await self.db_client.get_order_by_order_id(job.order_id)
+        if not order:
+            return await self.db_client.update_execution_job(job.job_id, {
+                "status": ExecutionJobStatus.FAILED,
+                "last_error": f"Order {job.order_id} not found",
+            })
+
+        try:
+            latest_order = await self.start_order_execution(order)
+            if latest_order.status in [OrderStatus.PLACED, OrderStatus.PARTIALLY_FILLED, OrderStatus.EXECUTED]:
+                return await self.db_client.update_execution_job(job.job_id, {
+                    "status": ExecutionJobStatus.SUCCEEDED,
+                    "last_error": None,
+                })
+
+            if latest_order.status == OrderStatus.FAILED:
+                next_status = ExecutionJobStatus.FAILED if job.attempts >= job.max_attempts else ExecutionJobStatus.QUEUED
+                return await self.db_client.update_execution_job(job.job_id, {
+                    "status": next_status,
+                    "last_error": latest_order.reason or "Order execution failed",
+                })
+
+            return await self.db_client.update_execution_job(job.job_id, {
+                "status": ExecutionJobStatus.QUEUED,
+                "last_error": f"Order remained in status {latest_order.status}",
+            })
+        except Exception as exc:
+            next_status = ExecutionJobStatus.FAILED if job.attempts >= job.max_attempts else ExecutionJobStatus.QUEUED
+            return await self.db_client.update_execution_job(job.job_id, {
+                "status": next_status,
+                "last_error": str(exc),
+            })

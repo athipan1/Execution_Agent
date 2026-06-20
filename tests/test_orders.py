@@ -1,6 +1,5 @@
 import pytest
 from fastapi.testclient import TestClient
-import time
 import uuid
 
 from app.main import app
@@ -62,39 +61,47 @@ def test_rejects_quantity_that_differs_from_final_quantity(client: TestClient):
     assert response.status_code == 422
 
 
-def test_create_order_and_get_status(client: TestClient):
+def test_create_order_enqueues_job_and_worker_executes(client: TestClient):
     trade_id = str(uuid.uuid4())
     order_data = {**BASE_ORDER, "trade_id": trade_id}
 
     response = client.post("/execute", headers=HEADERS, json=order_data)
+    assert response.status_code == 202
+
+    payload = response.json()["data"]
+    order_id = payload["order"]["order_id"]
+    job_id = payload["execution_job"]["job_id"]
+    assert payload["order"]["status"] == "pending"
+    assert payload["execution_job"]["status"] == "queued"
+
+    job_response = client.get(f"/jobs/{job_id}", headers=HEADERS)
+    assert job_response.status_code == 200
+    assert job_response.json()["data"]["order_id"] == order_id
+
+    worker_response = client.post("/jobs/process-next", headers=HEADERS)
+    assert worker_response.status_code == 200
+    assert worker_response.json()["data"]["status"] == "succeeded"
+
+    response = client.get(f"/execute/{order_id}", headers=HEADERS)
     assert response.status_code == 200
-
-    initial_order = response.json()["data"]
-    order_id = initial_order["order_id"]
-
-    for _ in range(10):
-        time.sleep(0.1)
-        response = client.get(f"/execute/{order_id}", headers=HEADERS)
-        assert response.status_code == 200
-        current_order = response.json()["data"]
-        if current_order["status"] == "executed":
-            assert current_order["executed_quantity"] == 100
-            assert "executed_at" in current_order
-            assert current_order["executed_at"] is not None
-            break
-    else:
-        pytest.fail("Order did not reach 'executed' status in time.")
+    current_order = response.json()["data"]
+    assert current_order["status"] == "executed"
+    assert current_order["executed_quantity"] == 100
+    assert current_order["executed_at"] is not None
 
 
-def test_create_failed_order(client: TestClient):
+def test_failed_order_job_records_failure(client: TestClient):
     trade_id = str(uuid.uuid4())
     order_data = {**BASE_ORDER, "trade_id": trade_id, "symbol": "FAIL.BK", "guard_plan": {**BASE_ORDER["guard_plan"], "symbol": "FAIL.BK"}}
 
     response = client.post("/execute", headers=HEADERS, json=order_data)
-    assert response.status_code == 200
-    order_id = response.json()["data"]["order_id"]
+    assert response.status_code == 202
+    payload = response.json()["data"]
+    order_id = payload["order"]["order_id"]
 
-    time.sleep(0.2)
+    worker_response = client.post("/jobs/process-next", headers=HEADERS)
+    assert worker_response.status_code == 200
+    assert worker_response.json()["data"]["status"] in {"queued", "failed"}
 
     response = client.get(f"/execute/{order_id}", headers=HEADERS)
     assert response.status_code == 200

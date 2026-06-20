@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 from app.main import create_order, get_broker_adapter
-from app.models import CreateOrderRequest, Order, OrderSide, OrderType, OrderStatus
+from app.models import CreateOrderRequest, Order, OrderSide, OrderType, OrderStatus, ExecutionJob, ExecutionJobStatus
 
 
 def base_request():
@@ -34,17 +34,18 @@ def pending_order():
 
 
 @pytest.mark.asyncio
-async def test_execute_awaits_lifecycle_without_background_tasks():
+async def test_execute_enqueues_job_without_broker_lifecycle():
     service = Mock()
     service.create_order = AsyncMock(return_value=pending_order())
-    executed = pending_order().model_copy(update={"status": OrderStatus.EXECUTED, "executed_quantity": 10})
-    service.start_order_execution = AsyncMock(return_value=executed)
+    service.enqueue_order_execution = AsyncMock(return_value=ExecutionJob(job_id=1, order_id=123, trade_id="trade-hardening-test", status=ExecutionJobStatus.QUEUED))
+    service.start_order_execution = AsyncMock()
 
     response = await create_order(base_request(), service=service, idempotency_key=None)
 
-    service.start_order_execution.assert_awaited_once()
-    assert response.data.status == OrderStatus.EXECUTED
-    assert response.data.executed_quantity == 10
+    service.enqueue_order_execution.assert_awaited_once()
+    service.start_order_execution.assert_not_called()
+    assert response.data["order"]["status"] == "pending"
+    assert response.data["execution_job"]["status"] == "queued"
 
 
 def test_live_mode_rejects_simulator_broker():

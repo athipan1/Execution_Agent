@@ -1,11 +1,11 @@
 import uuid
 from fastapi import FastAPI, Depends, Header, Request, HTTPException
 from fastapi.responses import JSONResponse
-from typing import Optional, Any, Dict, List
+from typing import Optional, Any, Dict, List, Union
 
 from app.models import (
     CreateOrderRequest, OrderResponse, CreateOrderResponse, Order, OrderStatus,
-    StandardAgentResponse, ErrorDetail, ExecutionResult, HealthResponse
+    StandardAgentResponse, ErrorDetail, ExecutionResult, HealthResponse, ExecutionJob
 )
 from app.services.execution_service import ExecutionService
 from app.db_client import get_db_client, DatabaseClient
@@ -126,23 +126,40 @@ def wrap_success(data: Any, confidence_score: float = 1.0) -> StandardAgentRespo
 
 # --- API Endpoints ---
 
-@app.post("/execute", response_model=StandardAgentResponse[CreateOrderResponse], status_code=200)
-@app.post("/execute_trade", response_model=StandardAgentResponse[CreateOrderResponse], status_code=200, include_in_schema=False)
+@app.post("/execute", response_model=StandardAgentResponse[Dict[str, Any]], status_code=202)
+@app.post("/execute_trade", response_model=StandardAgentResponse[Dict[str, Any]], status_code=202, include_in_schema=False)
 async def create_order(
     order_request: CreateOrderRequest,
     service: ExecutionService = Depends(get_execution_service),
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
 ):
     """
-    Primary endpoint for creating and executing trade orders.
+    Creates a persisted order and enqueues a durable execution job.
+    Broker placement is handled by worker processing, not by the request lifecycle.
     /execute_trade is provided as an alias for backward compatibility.
     """
     order_request.trade_id = idempotency_key or order_request.trade_id
     order = await service.create_order(order_request)
-    if order.status == OrderStatus.PENDING:
-        order = await service.start_order_execution(order)
+    job = await service.enqueue_order_execution(order)
 
-    return wrap_success(CreateOrderResponse.model_validate(order))
+    return wrap_success({
+        "order": CreateOrderResponse.model_validate(order).model_dump(mode="json"),
+        "execution_job": job.model_dump(mode="json"),
+    })
+
+
+@app.get("/jobs/{job_id}", response_model=StandardAgentResponse[ExecutionJob])
+async def get_execution_job(job_id: Union[int, str], service: ExecutionService = Depends(get_execution_service)):
+    job = await service.get_execution_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Execution job not found")
+    return wrap_success(job)
+
+
+@app.post("/jobs/process-next", response_model=StandardAgentResponse[Optional[ExecutionJob]])
+async def process_next_execution_job(service: ExecutionService = Depends(get_execution_service)):
+    job = await service.process_next_execution_job()
+    return wrap_success(job)
 
 
 @app.get("/execute/{order_id}", response_model=StandardAgentResponse[Order])

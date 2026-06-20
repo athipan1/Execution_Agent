@@ -25,6 +25,12 @@ class OrderStatus(str, Enum):
     FAILED = "failed"
     CANCELLED = "cancelled"
 
+class ExecutionJobStatus(str, Enum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+
 # --- API Models ---
 
 class CreateOrderRequest(BaseModel):
@@ -145,3 +151,16 @@ class Order(BaseModel):
     executed_quantity: int = 0
     avg_execution_price: Optional[float] = None
     executed_at: Optional[datetime] = None
+
+class ExecutionJob(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    job_id: Union[int, str]
+    order_id: int
+    trade_id: Union[int, str]
+    status: ExecutionJobStatus = ExecutionJobStatus.QUEUED
+    attempts: int = 0
+    max_attempts: int = 3
+    last_error: Optional[str] = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
