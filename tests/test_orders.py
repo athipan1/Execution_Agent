@@ -74,11 +74,11 @@ def test_create_order_enqueues_job_and_worker_executes(client: TestClient):
     assert payload["order"]["status"] == "pending"
     assert payload["execution_job"]["status"] == "queued"
 
-    job_response = client.get(f"/execution-jobs/{job_id}", headers=HEADERS)
+    job_response = client.get(f"/jobs/{job_id}", headers=HEADERS)
     assert job_response.status_code == 200
     assert job_response.json()["data"]["order_id"] == order_id
 
-    worker_response = client.post("/execution-jobs/process-next", headers=HEADERS)
+    worker_response = client.post("/jobs/process-next", headers=HEADERS)
     assert worker_response.status_code == 200
     assert worker_response.json()["data"]["status"] == "succeeded"
 
@@ -99,7 +99,7 @@ def test_failed_order_job_records_failure(client: TestClient):
     payload = response.json()["data"]
     order_id = payload["order"]["order_id"]
 
-    worker_response = client.post("/execution-jobs/process-next", headers=HEADERS)
+    worker_response = client.post("/jobs/process-next", headers=HEADERS)
     assert worker_response.status_code == 200
     assert worker_response.json()["data"]["status"] in {"queued", "failed"}
 
