@@ -1,8 +1,9 @@
 import pytest
 import respx
 import httpx
+from datetime import datetime, timedelta, timezone
 from app.db_client import HttpDatabaseClient
-from app.models import CreateOrderRequest, OrderSide, OrderType, TimeInForce, OrderStatus
+from app.models import CreateOrderRequest, OrderSide, OrderType, TimeInForce, OrderStatus, RiskApprovalStatus
 
 
 def risk_fields(quantity=10, symbol="AAPL"):
@@ -16,6 +17,18 @@ def risk_fields(quantity=10, symbol="AAPL"):
             "trigger_price": 95,
             "time_in_force": "GTC",
         },
+    }
+
+
+def approval_payload(status="approved", quantity=10):
+    return {
+        "approval_id": "risk-test-approval",
+        "account_id": 1,
+        "symbol": "AAPL",
+        "side": "buy",
+        "approved_quantity": quantity,
+        "status": status,
+        "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat(),
     }
 
 
@@ -54,6 +67,36 @@ async def test_http_db_client_create_order():
 
         assert order.order_id == 123
         assert order.status == OrderStatus.PENDING
+
+
+@pytest.mark.asyncio
+async def test_http_db_client_get_and_use_risk_approval():
+    base_url = "http://db-agent"
+    client = HttpDatabaseClient(base_url)
+
+    with respx.mock:
+        respx.get(f"{base_url}/risk-approvals/risk-test-approval").mock(return_value=httpx.Response(200, json=approval_payload()))
+        respx.post(f"{base_url}/risk-approvals/risk-test-approval/use").mock(return_value=httpx.Response(200, json={**approval_payload(status="used"), "used_at": datetime.now(timezone.utc).isoformat(), "order_id": 123}))
+
+        approval = await client.get_risk_approval("risk-test-approval")
+        used = await client.mark_risk_approval_used("risk-test-approval", 123)
+
+    assert approval.status == RiskApprovalStatus.APPROVED
+    assert approval.approved_quantity == 10
+    assert used.status == RiskApprovalStatus.USED
+    assert used.order_id == 123
+
+
+@pytest.mark.asyncio
+async def test_http_db_client_missing_risk_approval_returns_none():
+    base_url = "http://db-agent"
+    client = HttpDatabaseClient(base_url)
+
+    with respx.mock:
+        respx.get(f"{base_url}/risk-approvals/missing").mock(return_value=httpx.Response(404))
+        approval = await client.get_risk_approval("missing")
+
+    assert approval is None
 
 
 @pytest.mark.asyncio
