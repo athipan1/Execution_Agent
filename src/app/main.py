@@ -148,7 +148,8 @@ async def create_order(
     })
 
 
-@app.get("/execution-jobs/{job_id}", response_model=StandardAgentResponse[ExecutionJob])
+@app.get("/jobs/{job_id}", response_model=StandardAgentResponse[ExecutionJob])
+@app.get("/execution-jobs/{job_id}", response_model=StandardAgentResponse[ExecutionJob], include_in_schema=False)
 async def get_execution_job(job_id: Union[int, str], service: ExecutionService = Depends(get_execution_service)):
     job = await service.get_execution_job(job_id)
     if not job:
@@ -156,7 +157,8 @@ async def get_execution_job(job_id: Union[int, str], service: ExecutionService =
     return wrap_success(job)
 
 
-@app.post("/execution-jobs/process-next", response_model=StandardAgentResponse[Optional[ExecutionJob]])
+@app.post("/jobs/process-next", response_model=StandardAgentResponse[Optional[ExecutionJob]])
+@app.post("/execution-jobs/process-next", response_model=StandardAgentResponse[Optional[ExecutionJob]], include_in_schema=False)
 async def process_next_execution_job(service: ExecutionService = Depends(get_execution_service)):
     job = await service.process_next_execution_job()
     return wrap_success(job)
