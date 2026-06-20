@@ -6,15 +6,22 @@ from app.models import (
     ExecutionJobStatus,
     ReconciliationItem,
     ReconciliationReport,
+    RiskApproval,
+    RiskApprovalStatus,
 )
 from app.db_client import DatabaseClient
 from app.adapters.base import BrokerAdapter
 from app.logging import get_logger
 from typing import Dict, Any, Optional
+from datetime import datetime, timezone
 
 logger = get_logger(__name__)
 
 TERMINAL_ORDER_STATUSES = {OrderStatus.EXECUTED, OrderStatus.FAILED, OrderStatus.CANCELLED}
+
+
+class RiskApprovalError(ValueError):
+    pass
 
 
 class ExecutionService:
@@ -26,13 +33,42 @@ class ExecutionService:
         self.db_client = db_client
         self.broker_adapter = broker_adapter
 
+    def _validate_risk_approval(self, approval: RiskApproval, order_request: CreateOrderRequest) -> None:
+        now = datetime.now(timezone.utc)
+        expires_at = approval.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+
+        if approval.status != RiskApprovalStatus.APPROVED:
+            raise RiskApprovalError(f"Risk approval {approval.approval_id} is not approved: {approval.status}.")
+        if expires_at <= now:
+            raise RiskApprovalError(f"Risk approval {approval.approval_id} has expired.")
+        if str(approval.account_id) != str(order_request.account_id):
+            raise RiskApprovalError("Risk approval account_id does not match order account_id.")
+        if approval.symbol.upper() != order_request.symbol.upper():
+            raise RiskApprovalError("Risk approval symbol does not match order symbol.")
+        if approval.side != order_request.side:
+            raise RiskApprovalError("Risk approval side does not match order side.")
+        if approval.approved_quantity != order_request.final_quantity or approval.approved_quantity != order_request.quantity:
+            raise RiskApprovalError("Risk approval quantity does not match order quantity.")
+
+    async def verify_risk_approval(self, order_request: CreateOrderRequest) -> RiskApproval:
+        approval = await self.db_client.get_risk_approval(order_request.risk_approval_id)
+        if not approval:
+            raise RiskApprovalError(f"Risk approval {order_request.risk_approval_id} was not found.")
+        self._validate_risk_approval(approval, order_request)
+        return approval
+
     async def create_order(self, order_request: CreateOrderRequest) -> Order:
         existing_order = await self.db_client.get_order_by_trade_id(order_request.trade_id)
         if existing_order:
             logger.info("Idempotent request received for existing order.", extra={"trade_id": order_request.trade_id, "order_id": existing_order.order_id})
             return existing_order
+
+        await self.verify_risk_approval(order_request)
         new_order = await self.db_client.create_order(order_request)
-        logger.info("New order created in pending state.", extra={"trade_id": new_order.trade_id, "order_id": new_order.order_id})
+        await self.db_client.mark_risk_approval_used(order_request.risk_approval_id, new_order.order_id)
+        logger.info("New order created after risk approval verification.", extra={"trade_id": new_order.trade_id, "order_id": new_order.order_id, "risk_approval_id": order_request.risk_approval_id})
         return new_order
 
     async def enqueue_order_execution(self, order: Order) -> ExecutionJob:
@@ -95,10 +131,6 @@ class ExecutionService:
             return await self.db_client.update_execution_job(job.job_id, {"status": next_status, "last_error": str(exc)})
 
     async def reconcile_broker_orders(self, limit: int = 100) -> ReconciliationReport:
-        """
-        Reconciles in-flight local orders against the broker. This should be called by
-        a scheduled worker so Database/Manager do not rely on stale execution state.
-        """
         report = ReconciliationReport()
         orders = await self.db_client.list_in_flight_orders(limit=limit)
         report.checked = len(orders)
