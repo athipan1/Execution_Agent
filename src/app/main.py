@@ -51,6 +51,11 @@ def _validate_broker_mode() -> str:
     return broker_mode
 
 
+def _ensure_trading_enabled() -> None:
+    if not settings.TRADING_ENABLED:
+        raise HTTPException(status_code=423, detail="Trading is disabled by TRADING_ENABLED=false.")
+
+
 # --- Dependency Injection ---
 def get_broker_adapter() -> BrokerAdapter:
     """
@@ -138,6 +143,7 @@ async def create_order(
     Broker placement is handled by worker processing, not by the request lifecycle.
     /execute_trade is provided as an alias for backward compatibility.
     """
+    _ensure_trading_enabled()
     order_request.trade_id = idempotency_key or order_request.trade_id
     order = await service.create_order(order_request)
     job = await service.enqueue_order_execution(order)
