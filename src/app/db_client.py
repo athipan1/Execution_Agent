@@ -5,17 +5,21 @@ import asyncio
 from datetime import datetime, timezone
 from fastapi import HTTPException
 from fastapi.encoders import jsonable_encoder
-from app.models import Order, CreateOrderRequest, ExecutionJob, ExecutionJobStatus, OrderStatus
+from app.models import (
+    Order,
+    CreateOrderRequest,
+    ExecutionJob,
+    ExecutionJobStatus,
+    OrderStatus,
+    RiskApproval,
+    RiskApprovalStatus,
+)
 from app.config import settings
 from app.logging import get_logger
 
 logger = get_logger(__name__)
 
-IN_FLIGHT_ORDER_STATUSES = {
-    OrderStatus.PENDING,
-    OrderStatus.PLACED,
-    OrderStatus.PARTIALLY_FILLED,
-}
+IN_FLIGHT_ORDER_STATUSES = {OrderStatus.PENDING, OrderStatus.PLACED, OrderStatus.PARTIALLY_FILLED}
 
 class DatabaseClient(ABC):
     @abstractmethod
@@ -28,6 +32,10 @@ class DatabaseClient(ABC):
     async def list_in_flight_orders(self, limit: int = 100) -> List[Order]: ...
     @abstractmethod
     async def update_order(self, order_id: int, updates: Dict[str, Any]) -> Order: ...
+    @abstractmethod
+    async def get_risk_approval(self, approval_id: str) -> Optional[RiskApproval]: ...
+    @abstractmethod
+    async def mark_risk_approval_used(self, approval_id: str, order_id: int) -> RiskApproval: ...
     @abstractmethod
     async def create_execution_job(self, order: Order) -> ExecutionJob: ...
     @abstractmethod
@@ -98,6 +106,20 @@ class HttpDatabaseClient(DatabaseClient):
             response.raise_for_status()
             return Order.model_validate(self._unwrap_standard_response(response.json()))
 
+    async def get_risk_approval(self, approval_id: str) -> Optional[RiskApproval]:
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.get(f"{self.base_url}/risk-approvals/{approval_id}", headers=self._headers())
+            if response.status_code == 404:
+                return None
+            response.raise_for_status()
+            return RiskApproval.model_validate(self._unwrap_standard_response(response.json()))
+
+    async def mark_risk_approval_used(self, approval_id: str, order_id: int) -> RiskApproval:
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.post(f"{self.base_url}/risk-approvals/{approval_id}/use", json={"order_id": order_id}, headers=self._headers())
+            response.raise_for_status()
+            return RiskApproval.model_validate(self._unwrap_standard_response(response.json()))
+
     async def create_execution_job(self, order: Order) -> ExecutionJob:
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.post(f"{self.base_url}/execution-jobs", json=jsonable_encoder({"order_id": order.order_id, "trade_id": order.trade_id}), headers=self._headers())
@@ -139,11 +161,15 @@ class InMemoryDatabaseClient(DatabaseClient):
     def __init__(self):
         self._orders_by_trade_id: Dict[Union[int, str], Order] = {}
         self._orders_by_order_id: Dict[int, Order] = {}
+        self._risk_approvals_by_id: Dict[str, RiskApproval] = {}
         self._jobs_by_id: Dict[Union[int, str], ExecutionJob] = {}
         self._jobs_by_order_id: Dict[int, ExecutionJob] = {}
         self._id_seq = 1
         self._job_id_seq = 1
         self._lock = asyncio.Lock()
+
+    def seed_risk_approval(self, approval: RiskApproval) -> None:
+        self._risk_approvals_by_id[approval.approval_id] = approval
 
     def _job_key(self, job_id: Union[int, str]) -> Union[int, str]:
         try:
@@ -187,6 +213,22 @@ class InMemoryDatabaseClient(DatabaseClient):
             self._orders_by_order_id[order_id] = updated_order
             self._orders_by_trade_id[updated_order.trade_id] = updated_order
             return updated_order.model_copy()
+
+    async def get_risk_approval(self, approval_id: str) -> Optional[RiskApproval]:
+        async with self._lock:
+            approval = self._risk_approvals_by_id.get(approval_id)
+            return approval.model_copy() if approval else None
+
+    async def mark_risk_approval_used(self, approval_id: str, order_id: int) -> RiskApproval:
+        async with self._lock:
+            approval = self._risk_approvals_by_id.get(approval_id)
+            if not approval:
+                raise KeyError(f"Risk approval {approval_id} not found.")
+            if approval.status != RiskApprovalStatus.APPROVED:
+                raise ValueError(f"Risk approval {approval_id} is already {approval.status}.")
+            updated = approval.model_copy(update={"status": RiskApprovalStatus.USED, "used_at": datetime.now(timezone.utc), "order_id": order_id})
+            self._risk_approvals_by_id[approval_id] = updated
+            return updated.model_copy()
 
     async def create_execution_job(self, order: Order) -> ExecutionJob:
         async with self._lock:

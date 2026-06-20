@@ -92,7 +92,13 @@ def test_create_order_enqueues_job_and_worker_executes(client: TestClient):
 
 def test_failed_order_job_records_failure(client: TestClient):
     trade_id = str(uuid.uuid4())
-    order_data = {**BASE_ORDER, "trade_id": trade_id, "symbol": "FAIL.BK", "guard_plan": {**BASE_ORDER["guard_plan"], "symbol": "FAIL.BK"}}
+    order_data = {
+        **BASE_ORDER,
+        "trade_id": trade_id,
+        "symbol": "FAIL.BK",
+        "risk_approval_id": "risk-fail-approval",
+        "guard_plan": {**BASE_ORDER["guard_plan"], "symbol": "FAIL.BK"},
+    }
 
     response = client.post("/execute", headers=HEADERS, json=order_data)
     assert response.status_code == 202

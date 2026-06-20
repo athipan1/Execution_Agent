@@ -8,7 +8,7 @@ from app.models import (
     StandardAgentResponse, ErrorDetail, HealthResponse, ExecutionJob,
     ReconciliationReport,
 )
-from app.services.execution_service import ExecutionService
+from app.services.execution_service import ExecutionService, RiskApprovalError
 from app.db_client import get_db_client
 from app.adapters.base import BrokerAdapter
 from app.adapters.simulator import SimulatorAdapter
@@ -74,6 +74,11 @@ async def http_exception_handler(request: Request, exc: HTTPException):
     return JSONResponse(status_code=exc.status_code, content=StandardAgentResponse(status="error", error=ErrorDetail(code=f"HTTP_{exc.status_code}", message=exc.detail).model_dump()).model_dump(mode="json"))
 
 
+@app.exception_handler(RiskApprovalError)
+async def risk_approval_exception_handler(request: Request, exc: RiskApprovalError):
+    return JSONResponse(status_code=403, content=StandardAgentResponse(status="error", error=ErrorDetail(code="RISK_APPROVAL_REJECTED", message=str(exc)).model_dump()).model_dump(mode="json"))
+
+
 @app.exception_handler(Exception)
 async def generic_exception_handler(request: Request, exc: Exception):
     logger.error(f"Unhandled exception: {str(exc)}", exc_info=True)
@@ -109,7 +114,6 @@ async def process_next_execution_job(service: ExecutionService = Depends(get_exe
 
 @app.post("/reconciliation/run-once", response_model=StandardAgentResponse[ReconciliationReport])
 async def run_reconciliation_once(limit: int = 100, service: ExecutionService = Depends(get_execution_service)):
-    """Runs one broker-to-database reconciliation pass for in-flight orders."""
     return wrap_success(await service.reconcile_broker_orders(limit=limit))
 
 
