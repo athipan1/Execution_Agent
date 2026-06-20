@@ -1,10 +1,11 @@
 from abc import ABC, abstractmethod
-from typing import Optional, Dict, Any, Union
+from typing import Optional, Dict, Any, Union, List
 import httpx
 import asyncio
+from datetime import datetime, timezone
 from fastapi import HTTPException
 from fastapi.encoders import jsonable_encoder
-from app.models import Order, CreateOrderRequest
+from app.models import Order, CreateOrderRequest, ExecutionJob, ExecutionJobStatus
 from app.config import settings
 from app.logging import get_logger
 
@@ -26,6 +27,21 @@ class DatabaseClient(ABC):
     @abstractmethod
     async def update_order(self, order_id: int, updates: Dict[str, Any]) -> Order: ...
 
+    @abstractmethod
+    async def create_execution_job(self, order: Order) -> ExecutionJob: ...
+
+    @abstractmethod
+    async def get_execution_job(self, job_id: Union[int, str]) -> Optional[ExecutionJob]: ...
+
+    @abstractmethod
+    async def get_execution_job_by_order_id(self, order_id: int) -> Optional[ExecutionJob]: ...
+
+    @abstractmethod
+    async def claim_next_execution_job(self) -> Optional[ExecutionJob]: ...
+
+    @abstractmethod
+    async def update_execution_job(self, job_id: Union[int, str], updates: Dict[str, Any]) -> ExecutionJob: ...
+
 class HttpDatabaseClient(DatabaseClient):
     """
     HTTP implementation of the DatabaseClient that calls the external Database Agent.
@@ -38,7 +54,7 @@ class HttpDatabaseClient(DatabaseClient):
         api_key = settings.DATABASE_AGENT_API_KEY or settings.API_KEY
         return {"X-API-KEY": api_key}
 
-    def _unwrap_standard_response(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def _unwrap_standard_response(self, payload: Dict[str, Any]) -> Any:
         if isinstance(payload, dict) and "status" in payload and "data" in payload:
             if payload.get("status") == "error":
                 error = payload.get("error") or {}
@@ -98,6 +114,51 @@ class HttpDatabaseClient(DatabaseClient):
             response.raise_for_status()
             return Order.model_validate(self._unwrap_standard_response(response.json()))
 
+    async def create_execution_job(self, order: Order) -> ExecutionJob:
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.post(
+                f"{self.base_url}/execution-jobs",
+                json=jsonable_encoder({"order_id": order.order_id, "trade_id": order.trade_id}),
+                headers=self._headers(),
+            )
+            response.raise_for_status()
+            return ExecutionJob.model_validate(self._unwrap_standard_response(response.json()))
+
+    async def get_execution_job(self, job_id: Union[int, str]) -> Optional[ExecutionJob]:
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.get(f"{self.base_url}/execution-jobs/{job_id}", headers=self._headers())
+            if response.status_code == 404:
+                return None
+            response.raise_for_status()
+            return ExecutionJob.model_validate(self._unwrap_standard_response(response.json()))
+
+    async def get_execution_job_by_order_id(self, order_id: int) -> Optional[ExecutionJob]:
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.get(f"{self.base_url}/orders/{order_id}/execution-job", headers=self._headers())
+            if response.status_code == 404:
+                return None
+            response.raise_for_status()
+            return ExecutionJob.model_validate(self._unwrap_standard_response(response.json()))
+
+    async def claim_next_execution_job(self) -> Optional[ExecutionJob]:
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.post(f"{self.base_url}/execution-jobs/claim-next", headers=self._headers())
+            if response.status_code == 404:
+                return None
+            response.raise_for_status()
+            data = self._unwrap_standard_response(response.json())
+            return ExecutionJob.model_validate(data) if data else None
+
+    async def update_execution_job(self, job_id: Union[int, str], updates: Dict[str, Any]) -> ExecutionJob:
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.patch(
+                f"{self.base_url}/execution-jobs/{job_id}",
+                json=jsonable_encoder(updates),
+                headers=self._headers(),
+            )
+            response.raise_for_status()
+            return ExecutionJob.model_validate(self._unwrap_standard_response(response.json()))
+
 class InMemoryDatabaseClient(DatabaseClient):
     """
     An in-memory implementation of the DatabaseClient for development and testing.
@@ -106,7 +167,10 @@ class InMemoryDatabaseClient(DatabaseClient):
     def __init__(self):
         self._orders_by_trade_id: Dict[Union[int, str], Order] = {}
         self._orders_by_order_id: Dict[int, Order] = {}
+        self._jobs_by_id: Dict[Union[int, str], ExecutionJob] = {}
+        self._jobs_by_order_id: Dict[int, ExecutionJob] = {}
         self._id_seq = 1
+        self._job_id_seq = 1
         self._lock = asyncio.Lock()
 
     async def create_order(self, order_data: CreateOrderRequest) -> Order:
@@ -148,6 +212,58 @@ class InMemoryDatabaseClient(DatabaseClient):
             self._orders_by_trade_id[updated_order.trade_id] = updated_order
 
             return updated_order.model_copy()
+
+    async def create_execution_job(self, order: Order) -> ExecutionJob:
+        async with self._lock:
+            existing = self._jobs_by_order_id.get(order.order_id)
+            if existing:
+                return existing.model_copy()
+            job = ExecutionJob(
+                job_id=self._job_id_seq,
+                order_id=order.order_id,
+                trade_id=order.trade_id,
+                status=ExecutionJobStatus.QUEUED,
+            )
+            self._job_id_seq += 1
+            self._jobs_by_id[job.job_id] = job
+            self._jobs_by_order_id[order.order_id] = job
+            return job.model_copy()
+
+    async def get_execution_job(self, job_id: Union[int, str]) -> Optional[ExecutionJob]:
+        async with self._lock:
+            job = self._jobs_by_id.get(job_id)
+            return job.model_copy() if job else None
+
+    async def get_execution_job_by_order_id(self, order_id: int) -> Optional[ExecutionJob]:
+        async with self._lock:
+            job = self._jobs_by_order_id.get(order_id)
+            return job.model_copy() if job else None
+
+    async def claim_next_execution_job(self) -> Optional[ExecutionJob]:
+        async with self._lock:
+            for job in self._jobs_by_id.values():
+                if job.status == ExecutionJobStatus.QUEUED and job.attempts < job.max_attempts:
+                    updated = job.model_copy(update={
+                        "status": ExecutionJobStatus.RUNNING,
+                        "attempts": job.attempts + 1,
+                        "updated_at": datetime.now(timezone.utc),
+                    })
+                    self._jobs_by_id[job.job_id] = updated
+                    self._jobs_by_order_id[job.order_id] = updated
+                    return updated.model_copy()
+            return None
+
+    async def update_execution_job(self, job_id: Union[int, str], updates: Dict[str, Any]) -> ExecutionJob:
+        async with self._lock:
+            if job_id not in self._jobs_by_id:
+                raise KeyError(f"Execution job with ID {job_id} not found.")
+            stored_job = self._jobs_by_id[job_id]
+            update_payload = dict(updates)
+            update_payload["updated_at"] = update_payload.get("updated_at") or datetime.now(timezone.utc)
+            updated = stored_job.model_copy(update=update_payload)
+            self._jobs_by_id[job_id] = updated
+            self._jobs_by_order_id[updated.order_id] = updated
+            return updated.model_copy()
 
 _db_client_instance = None
 
