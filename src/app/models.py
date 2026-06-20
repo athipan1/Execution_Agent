@@ -1,8 +1,7 @@
 from pydantic import BaseModel, Field, ConfigDict, model_validator
-from typing import Optional, Any, Generic, TypeVar, Union, Dict
+from typing import Optional, Any, Generic, TypeVar, Union, Dict, List
 from enum import Enum
 from datetime import datetime, timezone
-import uuid
 
 class OrderSide(str, Enum):
     BUY = "buy"
@@ -13,9 +12,9 @@ class OrderType(str, Enum):
     LIMIT = "limit"
 
 class TimeInForce(str, Enum):
-    GTC = "GTC"  # Good 'til Canceled
-    IOC = "IOC"  # Immediate or Cancel
-    FOK = "FOK"  # Fill or Kill
+    GTC = "GTC"
+    IOC = "IOC"
+    FOK = "FOK"
 
 class OrderStatus(str, Enum):
     PENDING = "pending"
@@ -31,8 +30,6 @@ class ExecutionJobStatus(str, Enum):
     SUCCEEDED = "succeeded"
     FAILED = "failed"
 
-# --- API Models ---
-
 class CreateOrderRequest(BaseModel):
     trade_id: Union[int, str] = Field(..., description="Globally unique trade ID")
     account_id: Union[int, str]
@@ -42,8 +39,6 @@ class CreateOrderRequest(BaseModel):
     price: Optional[float] = None
     quantity: int
     time_in_force: TimeInForce = TimeInForce.GTC
-
-    # Required risk-gate fields. Execution_Agent is the final boundary before the broker.
     risk_approval_id: str
     final_quantity: int = Field(gt=0)
     guard_plan: Optional[Dict[str, Any]] = None
@@ -76,7 +71,6 @@ class TradeOrder(BaseModel):
 
 class OrderResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-
     order_id: int
     trade_id: Union[int, str]
     account_id: Union[int, str]
@@ -94,7 +88,6 @@ class OrderResponse(BaseModel):
     executed_at: Optional[datetime] = None
 
 class CreateOrderResponse(OrderResponse):
-    """Alias for OrderResponse to match central contract naming."""
     pass
 
 class ExecutionResult(BaseModel):
@@ -112,8 +105,6 @@ class HealthResponse(BaseModel):
     broker_connected: bool
     mode: str
 
-# --- Standard Response Models ---
-
 class ErrorDetail(BaseModel):
     code: str
     message: str
@@ -121,7 +112,7 @@ class ErrorDetail(BaseModel):
 T = TypeVar("T")
 
 class StandardAgentResponse(BaseModel, Generic[T]):
-    status: str  # "success" or "error"
+    status: str
     agent_type: str = "execution-agent"
     version: str = "1.0.0"
     data: Optional[T] = None
@@ -129,11 +120,8 @@ class StandardAgentResponse(BaseModel, Generic[T]):
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     confidence_score: Optional[float] = None
 
-# --- Internal Models ---
-
 class Order(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-
     order_id: int
     trade_id: Union[int, str]
     account_id: Union[int, str]
@@ -143,8 +131,6 @@ class Order(BaseModel):
     price: Optional[float] = None
     quantity: int
     time_in_force: TimeInForce
-
-    # --- State Fields ---
     status: OrderStatus = OrderStatus.PENDING
     broker_order_id: Optional[str] = None
     reason: Optional[str] = None
@@ -154,7 +140,6 @@ class Order(BaseModel):
 
 class ExecutionJob(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-
     job_id: Union[int, str]
     order_id: int
     trade_id: Union[int, str]
@@ -164,3 +149,18 @@ class ExecutionJob(BaseModel):
     last_error: Optional[str] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class ReconciliationItem(BaseModel):
+    order_id: int
+    broker_order_id: Optional[str] = None
+    previous_status: Optional[OrderStatus] = None
+    current_status: Optional[OrderStatus] = None
+    action: str
+    message: Optional[str] = None
+
+class ReconciliationReport(BaseModel):
+    checked: int = 0
+    updated: int = 0
+    skipped: int = 0
+    errors: int = 0
+    items: List[ReconciliationItem] = Field(default_factory=list)
