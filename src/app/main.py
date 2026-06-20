@@ -1,5 +1,5 @@
 import uuid
-from fastapi import FastAPI, Depends, Header, Request, HTTPException, BackgroundTasks
+from fastapi import FastAPI, Depends, Header, Request, HTTPException
 from fastapi.responses import JSONResponse
 from typing import Optional, Any, Dict, List
 
@@ -23,21 +23,44 @@ app = FastAPI(
 
 logger = get_logger(__name__)
 
+
+def _trading_mode() -> str:
+    return str(settings.TRADING_MODE or "PAPER").upper()
+
+
+def _broker_mode() -> str:
+    return str(settings.BROKER_MODE or "").upper()
+
+
+def _validate_broker_mode() -> str:
+    trading_mode = _trading_mode()
+    broker_mode = _broker_mode()
+
+    if trading_mode not in {"PAPER", "LIVE"}:
+        raise RuntimeError("TRADING_MODE must be PAPER or LIVE.")
+
+    if trading_mode == "LIVE":
+        if not settings.ALLOW_LIVE_TRADING:
+            raise RuntimeError("LIVE execution requires ALLOW_LIVE_TRADING=true.")
+        if broker_mode != "ALPACA":
+            raise RuntimeError("LIVE execution requires BROKER_MODE=ALPACA; simulator fallback is forbidden.")
+
+    if broker_mode not in {"SIMULATOR", "ALPACA"}:
+        raise RuntimeError(f"Unsupported BROKER_MODE '{settings.BROKER_MODE}'.")
+
+    return broker_mode
+
+
 # --- Dependency Injection ---
 def get_broker_adapter() -> BrokerAdapter:
     """
     Creates the appropriate broker adapter based on configuration.
     """
-    if settings.BROKER_MODE == "ALPACA":
+    broker_mode = _validate_broker_mode()
+    if broker_mode == "ALPACA":
         return AlpacaAdapter()
-    elif settings.BROKER_MODE == "SIMULATOR":
-        return SimulatorAdapter()
-    else:
-        logger.warning(
-            f"Unknown BROKER_MODE '{settings.BROKER_MODE}'. Defaulting to SIMULATOR.",
-            extra={"broker_mode": settings.BROKER_MODE},
-        )
-        return SimulatorAdapter()
+    return SimulatorAdapter()
+
 
 def get_execution_service(
     broker_adapter: BrokerAdapter = Depends(get_broker_adapter)
@@ -48,6 +71,7 @@ def get_execution_service(
     """
     db_client = get_db_client()
     return ExecutionService(db_client, broker_adapter)
+
 
 # --- Middleware & Exception Handlers ---
 
@@ -68,6 +92,7 @@ async def security_middleware(request: Request, call_next):
 
     return await call_next(request)
 
+
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
     return JSONResponse(
@@ -77,6 +102,7 @@ async def http_exception_handler(request: Request, exc: HTTPException):
             error=ErrorDetail(code=f"HTTP_{exc.status_code}", message=exc.detail).model_dump()
         ).model_dump(mode="json")
     )
+
 
 @app.exception_handler(Exception)
 async def generic_exception_handler(request: Request, exc: Exception):
@@ -89,6 +115,7 @@ async def generic_exception_handler(request: Request, exc: Exception):
         ).model_dump(mode="json")
     )
 
+
 def wrap_success(data: Any, confidence_score: float = 1.0) -> StandardAgentResponse[Any]:
     return StandardAgentResponse(
         status="success",
@@ -96,13 +123,13 @@ def wrap_success(data: Any, confidence_score: float = 1.0) -> StandardAgentRespo
         confidence_score=confidence_score
     )
 
+
 # --- API Endpoints ---
 
 @app.post("/execute", response_model=StandardAgentResponse[CreateOrderResponse], status_code=200)
 @app.post("/execute_trade", response_model=StandardAgentResponse[CreateOrderResponse], status_code=200, include_in_schema=False)
 async def create_order(
     order_request: CreateOrderRequest,
-    background_tasks: BackgroundTasks,
     service: ExecutionService = Depends(get_execution_service),
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
 ):
@@ -113,9 +140,10 @@ async def create_order(
     order_request.trade_id = idempotency_key or order_request.trade_id
     order = await service.create_order(order_request)
     if order.status == OrderStatus.PENDING:
-        background_tasks.add_task(service.start_order_execution, order)
+        order = await service.start_order_execution(order)
 
     return wrap_success(CreateOrderResponse.model_validate(order))
+
 
 @app.get("/execute/{order_id}", response_model=StandardAgentResponse[Order])
 async def get_order(order_id: int, service: ExecutionService = Depends(get_execution_service)):
@@ -127,6 +155,7 @@ async def get_order(order_id: int, service: ExecutionService = Depends(get_execu
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     return wrap_success(order)
+
 
 @app.post("/execute/{order_id}/cancel", response_model=StandardAgentResponse[Order])
 async def cancel_order(order_id: int, service: ExecutionService = Depends(get_execution_service)):
@@ -150,21 +179,25 @@ async def cancel_order(order_id: int, service: ExecutionService = Depends(get_ex
 
     raise HTTPException(status_code=400, detail="Order has no broker ID and cannot be cancelled.")
 
+
 @app.get("/account", response_model=StandardAgentResponse[Dict[str, Any]])
 async def get_account(adapter: BrokerAdapter = Depends(get_broker_adapter)):
     """Returns broker account status, cash, equity, and buying power."""
     return wrap_success(await adapter.get_account())
+
 
 @app.get("/positions", response_model=StandardAgentResponse[List[Dict[str, Any]]])
 async def get_positions(adapter: BrokerAdapter = Depends(get_broker_adapter)):
     """Returns current broker positions."""
     return wrap_success(await adapter.get_positions())
 
+
 @app.get("/orders", response_model=StandardAgentResponse[List[Dict[str, Any]]])
 @app.get("/orders/open", response_model=StandardAgentResponse[List[Dict[str, Any]]])
 async def get_open_orders(adapter: BrokerAdapter = Depends(get_broker_adapter)):
     """Returns open broker orders. /orders is an alias for /orders/open."""
     return wrap_success(await adapter.get_open_orders())
+
 
 @app.get("/portfolio", response_model=StandardAgentResponse[Dict[str, Any]])
 async def get_portfolio(adapter: BrokerAdapter = Depends(get_broker_adapter)):
@@ -173,7 +206,9 @@ async def get_portfolio(adapter: BrokerAdapter = Depends(get_broker_adapter)):
     positions = await adapter.get_positions()
     open_orders = await adapter.get_open_orders()
     return wrap_success({
-        "mode": settings.BROKER_MODE,
+        "mode": _broker_mode(),
+        "trading_mode": _trading_mode(),
+        "trading_enabled": settings.TRADING_ENABLED,
         "account": account,
         "positions": positions,
         "open_orders": open_orders,
@@ -181,9 +216,11 @@ async def get_portfolio(adapter: BrokerAdapter = Depends(get_broker_adapter)):
         "open_order_count": len(open_orders),
     })
 
+
 def get_alpaca_adapter() -> AlpacaAdapter:
     """Dependency injector for the AlpacaAdapter."""
     return AlpacaAdapter()
+
 
 # Health check endpoints
 
@@ -193,8 +230,9 @@ async def health_check(adapter: BrokerAdapter = Depends(get_broker_adapter)):
     return wrap_success(HealthResponse(
         status="healthy" if broker_connected else "degraded",
         broker_connected=broker_connected,
-        mode=settings.BROKER_MODE
+        mode=_broker_mode()
     ))
+
 
 @app.get("/health/alpaca", response_model=StandardAgentResponse[HealthResponse])
 async def health_check_alpaca(adapter: AlpacaAdapter = Depends(get_alpaca_adapter)):

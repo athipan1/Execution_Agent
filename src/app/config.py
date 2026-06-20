@@ -1,11 +1,17 @@
 from pydantic_settings import BaseSettings
 from typing import Optional
 
+
 class Settings(BaseSettings):
     API_KEY: str = "dev_execution_key"
     DATABASE_AGENT_API_KEY: Optional[str] = None
     DB_MODE: str = "agent"
     DB_AGENT_URL: Optional[str] = None
+
+    # Trading mode guardrails. Defaults are safe for local/paper workflows.
+    TRADING_MODE: str = "PAPER"
+    TRADING_ENABLED: bool = False
+    ALLOW_LIVE_TRADING: bool = False
 
     # Broker configuration
     BROKER_MODE: str = "SIMULATOR"  # Can be "SIMULATOR" or "ALPACA"
@@ -19,5 +25,6 @@ class Settings(BaseSettings):
 
     class Config:
         env_file = ".env"
+
 
 settings = Settings()

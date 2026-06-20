@@ -2,9 +2,10 @@ from app.models import CreateOrderRequest, Order, OrderStatus
 from app.db_client import DatabaseClient
 from app.adapters.base import BrokerAdapter
 from app.logging import get_logger
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 logger = get_logger(__name__)
+
 
 class ExecutionService:
     """
@@ -50,7 +51,7 @@ class ExecutionService:
         )
         await self.db_client.update_order(order_id, updates)
 
-    async def refresh_order_status(self, order_id: int) -> Order:
+    async def refresh_order_status(self, order_id: int) -> Optional[Order]:
         """
         Fetches the latest status from the broker and updates the database.
         """
@@ -61,7 +62,6 @@ class ExecutionService:
         if not order.broker_order_id:
             return order
 
-        # Only refresh if not in a final state
         if order.status in [OrderStatus.EXECUTED, OrderStatus.FAILED, OrderStatus.CANCELLED]:
             return order
 
@@ -73,23 +73,22 @@ class ExecutionService:
 
         return order
 
-    async def start_order_execution(self, order: Order):
+    async def start_order_execution(self, order: Order) -> Order:
         """
-        Initiates the actual order execution with the broker adapter.
-        This method is designed to be called in a background task.
+        Places a persisted pending order with the broker and returns the latest stored order.
+        This is awaited by the caller rather than scheduled as an in-process background task.
         """
         logger.info(
-            "Starting background execution for order.",
+            "Starting execution for order.",
             extra={"order_id": order.order_id, "symbol": order.symbol}
         )
         try:
-            # Directly await the broker adapter's call. FastAPI's BackgroundTasks
-            # will handle running this async function in the background.
             await self.broker_adapter.place_order(order, self._handle_broker_updates)
+            return await self.db_client.get_order_by_order_id(order.order_id) or order
         except Exception as e:
             logger.error(
                 "Order execution failed.",
                 extra={"order_id": order.order_id, "error": str(e)},
                 exc_info=True
             )
-            await self.db_client.update_order(order.order_id, {"status": OrderStatus.FAILED, "error_message": str(e)})
+            return await self.db_client.update_order(order.order_id, {"status": OrderStatus.FAILED, "error_message": str(e)})
