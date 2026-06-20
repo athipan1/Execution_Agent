@@ -30,6 +30,12 @@ class ExecutionJobStatus(str, Enum):
     SUCCEEDED = "succeeded"
     FAILED = "failed"
 
+class RiskApprovalStatus(str, Enum):
+    APPROVED = "approved"
+    USED = "used"
+    REVOKED = "revoked"
+    EXPIRED = "expired"
+
 class CreateOrderRequest(BaseModel):
     trade_id: Union[int, str] = Field(..., description="Globally unique trade ID")
     account_id: Union[int, str]
@@ -149,6 +155,17 @@ class ExecutionJob(BaseModel):
     last_error: Optional[str] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class RiskApproval(BaseModel):
+    approval_id: str
+    account_id: Union[int, str]
+    symbol: str
+    side: OrderSide
+    approved_quantity: int
+    status: RiskApprovalStatus = RiskApprovalStatus.APPROVED
+    expires_at: datetime
+    used_at: Optional[datetime] = None
+    order_id: Optional[int] = None
 
 class ReconciliationItem(BaseModel):
     order_id: int
