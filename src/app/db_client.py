@@ -173,6 +173,12 @@ class InMemoryDatabaseClient(DatabaseClient):
         self._job_id_seq = 1
         self._lock = asyncio.Lock()
 
+    def _job_key(self, job_id: Union[int, str]) -> Union[int, str]:
+        try:
+            return int(job_id)
+        except (TypeError, ValueError):
+            return job_id
+
     async def create_order(self, order_data: CreateOrderRequest) -> Order:
         async with self._lock:
             if order_data.trade_id in self._orders_by_trade_id:
@@ -225,13 +231,13 @@ class InMemoryDatabaseClient(DatabaseClient):
                 status=ExecutionJobStatus.QUEUED,
             )
             self._job_id_seq += 1
-            self._jobs_by_id[job.job_id] = job
+            self._jobs_by_id[self._job_key(job.job_id)] = job
             self._jobs_by_order_id[order.order_id] = job
             return job.model_copy()
 
     async def get_execution_job(self, job_id: Union[int, str]) -> Optional[ExecutionJob]:
         async with self._lock:
-            job = self._jobs_by_id.get(job_id)
+            job = self._jobs_by_id.get(self._job_key(job_id))
             return job.model_copy() if job else None
 
     async def get_execution_job_by_order_id(self, order_id: int) -> Optional[ExecutionJob]:
@@ -248,20 +254,22 @@ class InMemoryDatabaseClient(DatabaseClient):
                         "attempts": job.attempts + 1,
                         "updated_at": datetime.now(timezone.utc),
                     })
-                    self._jobs_by_id[job.job_id] = updated
+                    key = self._job_key(job.job_id)
+                    self._jobs_by_id[key] = updated
                     self._jobs_by_order_id[job.order_id] = updated
                     return updated.model_copy()
             return None
 
     async def update_execution_job(self, job_id: Union[int, str], updates: Dict[str, Any]) -> ExecutionJob:
         async with self._lock:
-            if job_id not in self._jobs_by_id:
+            key = self._job_key(job_id)
+            if key not in self._jobs_by_id:
                 raise KeyError(f"Execution job with ID {job_id} not found.")
-            stored_job = self._jobs_by_id[job_id]
+            stored_job = self._jobs_by_id[key]
             update_payload = dict(updates)
             update_payload["updated_at"] = update_payload.get("updated_at") or datetime.now(timezone.utc)
             updated = stored_job.model_copy(update=update_payload)
-            self._jobs_by_id[job_id] = updated
+            self._jobs_by_id[key] = updated
             self._jobs_by_order_id[updated.order_id] = updated
             return updated.model_copy()
 
