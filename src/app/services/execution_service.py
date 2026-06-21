@@ -8,6 +8,7 @@ from app.models import (
     ReconciliationReport,
     RiskApproval,
     RiskApprovalStatus,
+    FillPayload,
 )
 from app.db_client import DatabaseClient, InMemoryDatabaseClient
 from app.adapters.base import BrokerAdapter
@@ -111,12 +112,63 @@ class ExecutionService:
     async def get_execution_job(self, job_id) -> Optional[ExecutionJob]:
         return await self.db_client.get_execution_job(job_id)
 
+    def _executed_quantity_delta(self, previous_order: Optional[Order], updates: Dict[str, Any]) -> int:
+        try:
+            new_qty = int(updates.get("executed_quantity") or 0)
+        except (TypeError, ValueError):
+            return 0
+        old_qty = int(previous_order.executed_quantity or 0) if previous_order else 0
+        return max(0, new_qty - old_qty)
+
+    def _fill_payload_from_update(self, previous_order: Order, updates: Dict[str, Any], fill_quantity: int) -> Optional[FillPayload]:
+        fill_price = updates.get("avg_execution_price") or previous_order.avg_execution_price
+        if not fill_price or fill_quantity <= 0:
+            return None
+        filled_at = updates.get("executed_at") or datetime.now(timezone.utc)
+        broker_order_id = updates.get("broker_order_id") or previous_order.broker_order_id
+        broker_fill_id = updates.get("broker_fill_id") or f"{broker_order_id or previous_order.order_id}:{updates.get('executed_quantity')}"
+        return FillPayload(
+            order_id=previous_order.order_id,
+            trade_id=previous_order.trade_id,
+            symbol=previous_order.symbol,
+            side=previous_order.side,
+            quantity=fill_quantity,
+            fill_price=float(fill_price),
+            average_entry_price=previous_order.price,
+            broker_fill_id=str(broker_fill_id) if broker_fill_id else None,
+            broker_order_id=broker_order_id,
+            filled_at=filled_at,
+            metadata={
+                "source": "execution_agent_reconciliation",
+                "cumulative_executed_quantity": updates.get("executed_quantity"),
+                "order_status": str(updates.get("status")),
+            },
+        )
+
+    async def _record_fill_from_update(self, previous_order: Optional[Order], updates: Dict[str, Any]) -> None:
+        if not previous_order:
+            return
+        fill_quantity = self._executed_quantity_delta(previous_order, updates)
+        fill = self._fill_payload_from_update(previous_order, updates, fill_quantity)
+        if not fill:
+            return
+        try:
+            await self.db_client.record_fill(previous_order.account_id, fill)
+            logger.info("Recorded broker fill in Database Agent.", extra={"order_id": previous_order.order_id, "quantity": fill.quantity, "broker_fill_id": fill.broker_fill_id})
+        except Exception as exc:
+            message = f"Failed to record broker fill for order {previous_order.order_id}: {exc}"
+            if str(settings.TRADING_MODE or "PAPER").upper() == "LIVE":
+                raise RuntimeError(message) from exc
+            logger.warning(message)
+
     async def _handle_broker_updates(self, updates: Dict[str, Any]):
         order_id = updates.get("order_id")
         if not order_id:
             logger.error("Received broker update without an order_id.", extra={"update_data": updates})
             return
+        previous_order = await self.db_client.get_order_by_order_id(order_id)
         await self.db_client.update_order(order_id, updates)
+        await self._record_fill_from_update(previous_order, updates)
 
     async def refresh_order_status(self, order_id: int) -> Optional[Order]:
         order = await self.db_client.get_order_by_order_id(order_id)
@@ -172,7 +224,8 @@ class ExecutionService:
                     report.items.append(ReconciliationItem(order_id=order.order_id, broker_order_id=order.broker_order_id, previous_status=previous_status, current_status=order.status, action="error", message=updates.get("message") or updates.get("reason") or "Broker returned error."))
                     continue
                 updates["order_id"] = order.order_id
-                updated_order = await self.db_client.update_order(order.order_id, updates)
+                await self._handle_broker_updates(updates)
+                updated_order = await self.db_client.get_order_by_order_id(order.order_id) or order
                 changed = updated_order.status != previous_status or updated_order.executed_quantity != order.executed_quantity
                 if changed:
                     report.updated += 1

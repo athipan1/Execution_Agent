@@ -46,6 +46,7 @@ def order_request(trade_id: str, symbol: str = "AAPL"):
         symbol=symbol,
         side=OrderSide.BUY,
         order_type=OrderType.MARKET,
+        price=100.0,
         quantity=10,
         risk_approval_id=f"risk-{trade_id}",
         final_quantity=10,
@@ -78,6 +79,79 @@ async def test_reconcile_updates_in_flight_order_from_broker():
     assert report.items[0].action == "updated"
     assert updated.status == OrderStatus.EXECUTED
     assert updated.executed_quantity == 10
+
+
+@pytest.mark.asyncio
+async def test_reconcile_records_fill_delta_when_execution_quantity_increases():
+    db = InMemoryDatabaseClient()
+    order = await db.create_order(order_request("trade-reconcile-fill"))
+    await db.update_order(order.order_id, {"status": OrderStatus.PLACED, "broker_order_id": "broker-fill", "executed_quantity": 0})
+    broker = FakeBroker({
+        "broker-fill": {
+            "status": OrderStatus.EXECUTED,
+            "broker_order_id": "broker-fill",
+            "executed_quantity": 10,
+            "avg_execution_price": 101.5,
+            "executed_at": datetime(2026, 6, 21, 16, 0, tzinfo=timezone.utc),
+        }
+    })
+    service = ExecutionService(db, broker)
+
+    report = await service.reconcile_broker_orders()
+
+    assert report.updated == 1
+    assert len(db.fills) == 1
+    fill = db.fills[0]
+    assert fill["order_id"] == order.order_id
+    assert fill["trade_id"] == "trade-reconcile-fill"
+    assert fill["symbol"] == "AAPL"
+    assert fill["quantity"] == 10
+    assert fill["fill_price"] == 101.5
+    assert fill["broker_order_id"] == "broker-fill"
+
+
+@pytest.mark.asyncio
+async def test_reconcile_does_not_record_fill_when_quantity_unchanged():
+    db = InMemoryDatabaseClient()
+    order = await db.create_order(order_request("trade-reconcile-no-fill"))
+    await db.update_order(order.order_id, {"status": OrderStatus.PARTIALLY_FILLED, "broker_order_id": "broker-same", "executed_quantity": 5})
+    broker = FakeBroker({
+        "broker-same": {
+            "status": OrderStatus.PARTIALLY_FILLED,
+            "broker_order_id": "broker-same",
+            "executed_quantity": 5,
+            "avg_execution_price": 101.5,
+            "executed_at": datetime(2026, 6, 21, 16, 0, tzinfo=timezone.utc),
+        }
+    })
+    service = ExecutionService(db, broker)
+
+    report = await service.reconcile_broker_orders()
+
+    assert report.skipped == 1
+    assert len(db.fills) == 0
+
+
+@pytest.mark.asyncio
+async def test_reconcile_records_only_incremental_partial_fill_delta():
+    db = InMemoryDatabaseClient()
+    order = await db.create_order(order_request("trade-reconcile-partial-delta"))
+    await db.update_order(order.order_id, {"status": OrderStatus.PARTIALLY_FILLED, "broker_order_id": "broker-delta", "executed_quantity": 4})
+    broker = FakeBroker({
+        "broker-delta": {
+            "status": OrderStatus.EXECUTED,
+            "broker_order_id": "broker-delta",
+            "executed_quantity": 10,
+            "avg_execution_price": 102.0,
+            "executed_at": datetime(2026, 6, 21, 16, 0, tzinfo=timezone.utc),
+        }
+    })
+    service = ExecutionService(db, broker)
+
+    await service.reconcile_broker_orders()
+
+    assert len(db.fills) == 1
+    assert db.fills[0]["quantity"] == 6
 
 
 @pytest.mark.asyncio

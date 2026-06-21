@@ -148,6 +148,22 @@ class Order(BaseModel):
     guard_plan: Optional[Dict[str, Any]] = None
     protective_exit: Optional[Dict[str, Any]] = None
 
+class FillPayload(BaseModel):
+    order_id: int
+    trade_id: Union[int, str]
+    symbol: str
+    side: OrderSide
+    quantity: int = Field(gt=0)
+    fill_price: float = Field(gt=0)
+    average_entry_price: Optional[float] = None
+    fees: float = 0.0
+    realized_pnl: Optional[float] = None
+    broker_fill_id: Optional[str] = None
+    broker_order_id: Optional[str] = None
+    liquidity: Optional[str] = None
+    filled_at: Optional[datetime] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
 class ExecutionJob(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     job_id: Union[int, str]
