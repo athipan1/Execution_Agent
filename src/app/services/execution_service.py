@@ -11,6 +11,7 @@ from app.models import (
 )
 from app.db_client import DatabaseClient, InMemoryDatabaseClient
 from app.adapters.base import BrokerAdapter
+from app.config import settings
 from app.logging import get_logger
 from typing import Dict, Any, Optional
 from datetime import datetime, timezone, timedelta
@@ -74,6 +75,22 @@ class ExecutionService:
         self._validate_risk_approval(approval, order_request)
         return approval
 
+    async def _ensure_protection_metadata(self, order: Order, order_request: CreateOrderRequest) -> Order:
+        updates: Dict[str, Any] = {}
+        if order_request.guard_plan and not order.guard_plan:
+            updates["guard_plan"] = order_request.guard_plan
+        if order_request.protective_exit and not order.protective_exit:
+            updates["protective_exit"] = order_request.protective_exit
+        if not updates:
+            return order
+        try:
+            return await self.db_client.update_order(order.order_id, updates)
+        except Exception as exc:
+            if str(settings.TRADING_MODE or "PAPER").upper() == "LIVE":
+                raise RuntimeError(f"Failed to persist protective order metadata in LIVE mode: {exc}") from exc
+            logger.warning("Failed to persist protective order metadata; keeping it in memory for this request.", extra={"order_id": order.order_id, "error": str(exc)})
+            return order.model_copy(update=updates)
+
     async def create_order(self, order_request: CreateOrderRequest) -> Order:
         existing_order = await self.db_client.get_order_by_trade_id(order_request.trade_id)
         if existing_order:
@@ -81,6 +98,7 @@ class ExecutionService:
             return existing_order
         await self.verify_risk_approval(order_request)
         new_order = await self.db_client.create_order(order_request)
+        new_order = await self._ensure_protection_metadata(new_order, order_request)
         await self.db_client.mark_risk_approval_used(order_request.risk_approval_id, new_order.order_id)
         logger.info("New order created after risk approval verification.", extra={"trade_id": new_order.trade_id, "order_id": new_order.order_id, "risk_approval_id": order_request.risk_approval_id})
         return new_order
