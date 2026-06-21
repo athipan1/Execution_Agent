@@ -92,6 +92,8 @@ class OrderResponse(BaseModel):
     executed_quantity: int = 0
     avg_execution_price: Optional[float] = None
     executed_at: Optional[datetime] = None
+    guard_plan: Optional[Dict[str, Any]] = None
+    protective_exit: Optional[Dict[str, Any]] = None
 
 class CreateOrderResponse(OrderResponse):
     pass
@@ -143,6 +145,8 @@ class Order(BaseModel):
     executed_quantity: int = 0
     avg_execution_price: Optional[float] = None
     executed_at: Optional[datetime] = None
+    guard_plan: Optional[Dict[str, Any]] = None
+    protective_exit: Optional[Dict[str, Any]] = None
 
 class ExecutionJob(BaseModel):
     model_config = ConfigDict(from_attributes=True)
