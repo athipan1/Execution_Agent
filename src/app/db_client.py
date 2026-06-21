@@ -284,6 +284,8 @@ def get_db_client() -> DatabaseClient:
             logger.info(f"Using HttpDatabaseClient with URL: {settings.DB_AGENT_URL}")
             _db_client_instance = HttpDatabaseClient(settings.DB_AGENT_URL)
         else:
+            if str(settings.TRADING_MODE or "PAPER").upper() == "LIVE":
+                raise RuntimeError("DB_AGENT_URL is required in LIVE mode; in-memory execution state is forbidden.")
             logger.warning("DB_AGENT_URL not set. Falling back to InMemoryDatabaseClient (not recommended for production).")
             _db_client_instance = InMemoryDatabaseClient()
     return _db_client_instance
