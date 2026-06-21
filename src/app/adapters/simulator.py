@@ -4,6 +4,7 @@ from typing import Dict, Any, List
 from datetime import datetime, timezone
 from app.adapters.base import BrokerAdapter, StatusUpdateCallable
 from app.models import Order, OrderStatus, OrderSide, TradeOrder
+from app.services.protective_order_service import ProtectiveOrderError, validate_protection_plan
 
 class SimulatorAdapter(BrokerAdapter):
     """
@@ -12,13 +13,27 @@ class SimulatorAdapter(BrokerAdapter):
 
     async def place_order(self, order: Order, update_callback: StatusUpdateCallable):
         """Simulates placing an order with deterministic behavior based on the symbol."""
+        try:
+            protection = validate_protection_plan(order, required=False)
+        except ProtectiveOrderError as exc:
+            await update_callback({
+                "order_id": order.order_id,
+                "status": OrderStatus.FAILED,
+                "reason": f"Invalid simulated protective exit: {exc}",
+            })
+            return
+
         broker_order_id = f"sim-{uuid.uuid4()}"
 
-        await update_callback({
+        update = {
             "order_id": order.order_id,
             "status": OrderStatus.PLACED,
-            "broker_order_id": broker_order_id
-        })
+            "broker_order_id": broker_order_id,
+        }
+        if protection:
+            update["reason"] = f"Simulated protective {protection['side']} stop attached at {protection['trigger_price']}"
+
+        await update_callback(update)
 
         await asyncio.sleep(0.1)
 
