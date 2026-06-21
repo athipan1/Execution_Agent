@@ -5,6 +5,10 @@ from app.adapters.base import BrokerAdapter, StatusUpdateCallable
 from app.models import Order, OrderStatus, TradeOrder
 from app.config import settings
 from app.logging import get_logger
+from app.services.protective_order_service import (
+    ProtectiveOrderError,
+    build_alpaca_entry_payload,
+)
 
 logger = get_logger(__name__)
 
@@ -75,16 +79,17 @@ class AlpacaAdapter(BrokerAdapter):
         headers = self._get_auth_headers()
         headers["Content-Type"] = "application/json"
 
-        payload = {
-            "side": order.side.value,
-            "symbol": order.symbol,
-            "qty": str(order.quantity),
-            "type": order.order_type.value,
-            "time_in_force": order.time_in_force.value.lower(),
-        }
-
-        if order.order_type.value == "limit" and order.price:
-            payload["limit_price"] = str(order.price)
+        try:
+            payload = build_alpaca_entry_payload(
+                order,
+                require_protection=str(settings.TRADING_MODE or "PAPER").upper() == "LIVE",
+            )
+        except ProtectiveOrderError as exc:
+            logger.error(
+                "Refusing to submit unprotected or invalid Alpaca order.",
+                extra={"order_id": order.order_id, "symbol": order.symbol, "error": str(exc)},
+            )
+            return httpx.Response(422, json={"message": str(exc)})
 
         try:
             return await self._client.post(self._url("/v2/orders"), headers=headers, json=payload)
