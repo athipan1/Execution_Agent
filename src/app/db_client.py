@@ -13,6 +13,7 @@ from app.models import (
     OrderStatus,
     RiskApproval,
     RiskApprovalStatus,
+    FillPayload,
 )
 from app.config import settings
 from app.logging import get_logger
@@ -46,6 +47,8 @@ class DatabaseClient(ABC):
     async def claim_next_execution_job(self) -> Optional[ExecutionJob]: ...
     @abstractmethod
     async def update_execution_job(self, job_id: Union[int, str], updates: Dict[str, Any]) -> ExecutionJob: ...
+    @abstractmethod
+    async def record_fill(self, account_id: Union[int, str], fill: FillPayload) -> Dict[str, Any]: ...
 
 class HttpDatabaseClient(DatabaseClient):
     def __init__(self, base_url: str):
@@ -157,6 +160,12 @@ class HttpDatabaseClient(DatabaseClient):
             response.raise_for_status()
             return ExecutionJob.model_validate(self._unwrap_standard_response(response.json()))
 
+    async def record_fill(self, account_id: Union[int, str], fill: FillPayload) -> Dict[str, Any]:
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.post(f"{self.base_url}/accounts/{account_id}/fills", json=jsonable_encoder(fill), headers=self._headers())
+            response.raise_for_status()
+            return self._unwrap_standard_response(response.json()) or {}
+
 class InMemoryDatabaseClient(DatabaseClient):
     def __init__(self):
         self._orders_by_trade_id: Dict[Union[int, str], Order] = {}
@@ -164,9 +173,14 @@ class InMemoryDatabaseClient(DatabaseClient):
         self._risk_approvals_by_id: Dict[str, RiskApproval] = {}
         self._jobs_by_id: Dict[Union[int, str], ExecutionJob] = {}
         self._jobs_by_order_id: Dict[int, ExecutionJob] = {}
+        self._fills: List[Dict[str, Any]] = []
         self._id_seq = 1
         self._job_id_seq = 1
         self._lock = asyncio.Lock()
+
+    @property
+    def fills(self) -> List[Dict[str, Any]]:
+        return list(self._fills)
 
     def seed_risk_approval(self, approval: RiskApproval) -> None:
         self._risk_approvals_by_id[approval.approval_id] = approval
@@ -274,6 +288,13 @@ class InMemoryDatabaseClient(DatabaseClient):
             self._jobs_by_id[key] = updated
             self._jobs_by_order_id[updated.order_id] = updated
             return updated.model_copy()
+
+    async def record_fill(self, account_id: Union[int, str], fill: FillPayload) -> Dict[str, Any]:
+        async with self._lock:
+            payload = fill.model_dump(mode="json")
+            payload["account_id"] = account_id
+            self._fills.append(payload)
+            return dict(payload)
 
 _db_client_instance = None
 
