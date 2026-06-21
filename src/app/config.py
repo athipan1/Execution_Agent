@@ -18,6 +18,12 @@ class Settings(BaseSettings):
     BROKER_API_KEY: Optional[str] = None
     BROKER_API_SECRET: Optional[str] = None
 
+    # Worker configuration
+    EXECUTION_WORKER_POLL_SECONDS: float = 2.0
+    RECONCILIATION_WORKER_POLL_SECONDS: float = 30.0
+    RECONCILIATION_LIMIT: int = 100
+    WORKER_RUN_ONCE: bool = False
+
     # Alpaca configuration
     ALPACA_API_KEY_ID: Optional[str] = None
     ALPACA_SECRET_KEY: Optional[str] = None
