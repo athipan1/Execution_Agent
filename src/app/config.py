@@ -7,6 +7,9 @@ class Settings(BaseSettings):
     DATABASE_AGENT_API_KEY: Optional[str] = None
     DB_MODE: str = "agent"
     DB_AGENT_URL: Optional[str] = None
+    BROKER_SYNC_ENDPOINT: str = "/broker-sync"
+    BROKER_SYNC_TIMEOUT_SECONDS: float = 20.0
+    FAIL_RECONCILE_WHEN_DB_SYNC_FAILS: bool = False
 
     # Trading mode guardrails. Defaults are safe for local/paper workflows.
     TRADING_MODE: str = "PAPER"
