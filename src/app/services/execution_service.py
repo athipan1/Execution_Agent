@@ -14,6 +14,7 @@ from app.db_client import DatabaseClient, InMemoryDatabaseClient
 from app.adapters.base import BrokerAdapter
 from app.config import settings
 from app.logging import get_logger
+from app.services.broker_preflight import BrokerPreflightError, build_broker_preflight_snapshot, validate_broker_preflight
 from typing import Dict, Any, Optional
 from datetime import datetime, timezone, timedelta
 
@@ -112,6 +113,22 @@ class ExecutionService:
     async def get_execution_job(self, job_id) -> Optional[ExecutionJob]:
         return await self.db_client.get_execution_job(job_id)
 
+    async def broker_preflight_snapshot(self, order: Optional[Order] = None) -> Dict[str, Any]:
+        account = await self.broker_adapter.get_account()
+        positions = await self.broker_adapter.get_positions()
+        open_orders = await self.broker_adapter.get_open_orders()
+        return build_broker_preflight_snapshot(account, positions, open_orders, order)
+
+    async def run_broker_preflight(self, order: Order) -> Dict[str, Any]:
+        if not settings.REQUIRE_BROKER_PREFLIGHT:
+            return {"approved": True, "skipped": True, "reason": "REQUIRE_BROKER_PREFLIGHT=false"}
+        account = await self.broker_adapter.get_account()
+        positions = await self.broker_adapter.get_positions()
+        open_orders = await self.broker_adapter.get_open_orders()
+        snapshot = validate_broker_preflight(account, positions, open_orders, order)
+        logger.info("Broker preflight approved order.", extra={"order_id": order.order_id, "snapshot": snapshot})
+        return snapshot
+
     def _executed_quantity_delta(self, previous_order: Optional[Order], updates: Dict[str, Any]) -> int:
         try:
             new_qty = int(updates.get("executed_quantity") or 0)
@@ -183,8 +200,11 @@ class ExecutionService:
 
     async def start_order_execution(self, order: Order) -> Order:
         try:
+            await self.run_broker_preflight(order)
             await self.broker_adapter.place_order(order, self._handle_broker_updates)
             return await self.db_client.get_order_by_order_id(order.order_id) or order
+        except BrokerPreflightError as exc:
+            return await self.db_client.update_order(order.order_id, {"status": OrderStatus.FAILED, "reason": str(exc)})
         except Exception as e:
             return await self.db_client.update_order(order.order_id, {"status": OrderStatus.FAILED, "reason": str(e)})
 

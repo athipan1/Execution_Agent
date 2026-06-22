@@ -9,6 +9,7 @@ from app.models import (
     ReconciliationReport,
 )
 from app.services.execution_service import ExecutionService, RiskApprovalError
+from app.services.broker_preflight import BrokerPreflightError
 from app.db_client import get_db_client
 from app.adapters.base import BrokerAdapter
 from app.adapters.simulator import SimulatorAdapter
@@ -16,7 +17,7 @@ from app.adapters.alpaca import AlpacaAdapter
 from app.config import settings
 from app.logging import get_logger
 
-app = FastAPI(title="Execution Agent", description="A production-grade service for executing trading orders.", version="1.0.0")
+app = FastAPI(title="Execution Agent", description="A production-grade service for executing trading orders.", version="1.1.0")
 logger = get_logger(__name__)
 
 
@@ -77,6 +78,11 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 @app.exception_handler(RiskApprovalError)
 async def risk_approval_exception_handler(request: Request, exc: RiskApprovalError):
     return JSONResponse(status_code=403, content=StandardAgentResponse(status="error", error=ErrorDetail(code="RISK_APPROVAL_REJECTED", message=str(exc)).model_dump()).model_dump(mode="json"))
+
+
+@app.exception_handler(BrokerPreflightError)
+async def broker_preflight_exception_handler(request: Request, exc: BrokerPreflightError):
+    return JSONResponse(status_code=409, content=StandardAgentResponse(status="error", error=ErrorDetail(code="BROKER_PREFLIGHT_REJECTED", message=str(exc)).model_dump()).model_dump(mode="json"))
 
 
 @app.exception_handler(Exception)
@@ -162,6 +168,19 @@ async def get_portfolio(adapter: BrokerAdapter = Depends(get_broker_adapter)):
     positions = await adapter.get_positions()
     open_orders = await adapter.get_open_orders()
     return wrap_success({"mode": _broker_mode(), "trading_mode": _trading_mode(), "trading_enabled": settings.TRADING_ENABLED, "account": account, "positions": positions, "open_orders": open_orders, "position_count": len(positions), "open_order_count": len(open_orders)})
+
+
+@app.get("/broker/preflight", response_model=StandardAgentResponse[Dict[str, Any]])
+async def broker_preflight(service: ExecutionService = Depends(get_execution_service)):
+    return wrap_success(await service.broker_preflight_snapshot())
+
+
+@app.post("/broker/preflight/order/{order_id}", response_model=StandardAgentResponse[Dict[str, Any]])
+async def broker_order_preflight(order_id: int, service: ExecutionService = Depends(get_execution_service)):
+    order = await service.db_client.get_order_by_order_id(order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    return wrap_success(await service.run_broker_preflight(order))
 
 
 def get_alpaca_adapter() -> AlpacaAdapter:
