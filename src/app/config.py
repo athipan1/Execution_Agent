@@ -18,6 +18,14 @@ class Settings(BaseSettings):
     BROKER_API_KEY: Optional[str] = None
     BROKER_API_SECRET: Optional[str] = None
 
+    # Broker pre-execution safety guards.
+    REQUIRE_BROKER_PREFLIGHT: bool = True
+    BLOCK_BUY_WHEN_NO_BUYING_POWER: bool = True
+    MIN_BUYING_POWER_AFTER_ORDER: float = 0.0
+    MAX_STALE_OPEN_ORDER_AGE_MINUTES: int = 390
+    FAIL_ON_STALE_OPEN_ORDERS: bool = True
+    FAIL_ON_ACCOUNT_RESTRICTED: bool = True
+
     # Worker configuration
     EXECUTION_WORKER_POLL_SECONDS: float = 2.0
     RECONCILIATION_WORKER_POLL_SECONDS: float = 30.0
