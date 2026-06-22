@@ -25,6 +25,14 @@ class BrokerAdapter(ABC):
         """Cancels a live order at the broker."""
         ...
 
+    async def cancel_open_order(self, broker_order: Dict[str, Any]) -> dict:
+        """Cancels an open broker order object returned by get_open_orders()."""
+        broker_order_id = str(broker_order.get("id") or broker_order.get("broker_order_id") or "")
+        if not broker_order_id:
+            return {"status": "error", "message": "broker order id missing", "order": broker_order}
+        result = await self.cancel_order(broker_order_id)
+        return {**result, "broker_order_id": broker_order_id, "symbol": broker_order.get("symbol"), "side": broker_order.get("side"), "qty": broker_order.get("qty")}
+
     @abstractmethod
     async def get_order_status(self, broker_order_id: str) -> dict:
         """Retrieves the current status of an order from the broker."""
