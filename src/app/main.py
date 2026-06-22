@@ -11,6 +11,7 @@ from app.models import (
 from app.services.execution_service import ExecutionService, RiskApprovalError
 from app.services.broker_preflight import BrokerPreflightError
 from app.services.broker_cleanup import BrokerCleanupService
+from app.services.broker_state_reconciliation import BrokerStateReconciliationService
 from app.db_client import get_db_client
 from app.adapters.base import BrokerAdapter
 from app.adapters.simulator import SimulatorAdapter
@@ -18,7 +19,7 @@ from app.adapters.alpaca import AlpacaAdapter
 from app.config import settings
 from app.logging import get_logger
 
-app = FastAPI(title="Execution Agent", description="A production-grade service for executing trading orders.", version="1.2.0")
+app = FastAPI(title="Execution Agent", description="A production-grade service for executing trading orders.", version="1.3.0")
 logger = get_logger(__name__)
 
 
@@ -63,6 +64,10 @@ def get_execution_service(broker_adapter: BrokerAdapter = Depends(get_broker_ada
 
 def get_broker_cleanup_service(broker_adapter: BrokerAdapter = Depends(get_broker_adapter)) -> BrokerCleanupService:
     return BrokerCleanupService(broker_adapter)
+
+
+def get_broker_state_reconciliation_service(broker_adapter: BrokerAdapter = Depends(get_broker_adapter)) -> BrokerStateReconciliationService:
+    return BrokerStateReconciliationService(broker_adapter)
 
 
 @app.middleware("http")
@@ -201,6 +206,16 @@ async def broker_cancel_stale_orders(dry_run: bool = True, max_age_minutes: Opti
 @app.post("/broker/orders/cancel-all-open", response_model=StandardAgentResponse[Dict[str, Any]])
 async def broker_cancel_all_open_orders(dry_run: bool = True, service: BrokerCleanupService = Depends(get_broker_cleanup_service)):
     return wrap_success(await service.cancel_all_open_orders(dry_run=dry_run))
+
+
+@app.get("/broker/state", response_model=StandardAgentResponse[Dict[str, Any]])
+async def broker_state(account_id: int = 1, service: BrokerStateReconciliationService = Depends(get_broker_state_reconciliation_service)):
+    return wrap_success(await service.collect_broker_state(account_id=account_id))
+
+
+@app.post("/broker/reconcile", response_model=StandardAgentResponse[Dict[str, Any]])
+async def broker_reconcile(account_id: int = 1, push_to_database: bool = True, service: BrokerStateReconciliationService = Depends(get_broker_state_reconciliation_service)):
+    return wrap_success(await service.reconcile(account_id=account_id, push_to_database=push_to_database))
 
 
 def get_alpaca_adapter() -> AlpacaAdapter:
