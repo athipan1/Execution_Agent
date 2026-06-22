@@ -10,6 +10,7 @@ from app.models import (
 )
 from app.services.execution_service import ExecutionService, RiskApprovalError
 from app.services.broker_preflight import BrokerPreflightError
+from app.services.broker_cleanup import BrokerCleanupService
 from app.db_client import get_db_client
 from app.adapters.base import BrokerAdapter
 from app.adapters.simulator import SimulatorAdapter
@@ -17,7 +18,7 @@ from app.adapters.alpaca import AlpacaAdapter
 from app.config import settings
 from app.logging import get_logger
 
-app = FastAPI(title="Execution Agent", description="A production-grade service for executing trading orders.", version="1.1.0")
+app = FastAPI(title="Execution Agent", description="A production-grade service for executing trading orders.", version="1.2.0")
 logger = get_logger(__name__)
 
 
@@ -58,6 +59,10 @@ def get_broker_adapter() -> BrokerAdapter:
 
 def get_execution_service(broker_adapter: BrokerAdapter = Depends(get_broker_adapter)) -> ExecutionService:
     return ExecutionService(get_db_client(), broker_adapter)
+
+
+def get_broker_cleanup_service(broker_adapter: BrokerAdapter = Depends(get_broker_adapter)) -> BrokerCleanupService:
+    return BrokerCleanupService(broker_adapter)
 
 
 @app.middleware("http")
@@ -181,6 +186,21 @@ async def broker_order_preflight(order_id: int, service: ExecutionService = Depe
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     return wrap_success(await service.run_broker_preflight(order))
+
+
+@app.get("/broker/cleanup/status", response_model=StandardAgentResponse[Dict[str, Any]])
+async def broker_cleanup_status(max_age_minutes: Optional[int] = None, service: BrokerCleanupService = Depends(get_broker_cleanup_service)):
+    return wrap_success(await service.cleanup_status(max_age_minutes=max_age_minutes))
+
+
+@app.post("/broker/orders/cancel-stale", response_model=StandardAgentResponse[Dict[str, Any]])
+async def broker_cancel_stale_orders(dry_run: bool = True, max_age_minutes: Optional[int] = None, service: BrokerCleanupService = Depends(get_broker_cleanup_service)):
+    return wrap_success(await service.cancel_stale_open_orders(max_age_minutes=max_age_minutes, dry_run=dry_run))
+
+
+@app.post("/broker/orders/cancel-all-open", response_model=StandardAgentResponse[Dict[str, Any]])
+async def broker_cancel_all_open_orders(dry_run: bool = True, service: BrokerCleanupService = Depends(get_broker_cleanup_service)):
+    return wrap_success(await service.cancel_all_open_orders(dry_run=dry_run))
 
 
 def get_alpaca_adapter() -> AlpacaAdapter:
