@@ -127,6 +127,40 @@ async def validate_execute_batch(order_requests: List[CreateOrderRequest], adapt
     return wrap_success(result, confidence_score=1.0 if result.get("approved") else 0.0)
 
 
+@app.post("/execute/batch", response_model=StandardAgentResponse[Dict[str, Any]], status_code=202)
+async def create_order_batch(order_requests: List[CreateOrderRequest], service: ExecutionService = Depends(get_execution_service), adapter: BrokerAdapter = Depends(get_broker_adapter)):
+    _ensure_trading_enabled()
+    open_orders = await adapter.get_open_orders()
+    validation = validate_bucket_order_batch(order_requests, existing_open_symbols=_open_order_symbols(open_orders))
+    if not validation.get("approved"):
+        return wrap_success({"approved": False, "created": [], "failed": [], "validation": validation}, confidence_score=0.0)
+
+    created: List[Dict[str, Any]] = []
+    failed: List[Dict[str, Any]] = []
+    for order_request in order_requests:
+        try:
+            order = await service.create_order(order_request)
+            job = await service.enqueue_order_execution(order)
+            created.append({
+                "symbol": order.symbol,
+                "strategy_bucket": getattr(order, "strategy_bucket", "unassigned"),
+                "order": CreateOrderResponse.model_validate(order).model_dump(mode="json"),
+                "execution_job": job.model_dump(mode="json"),
+            })
+        except Exception as exc:
+            failed.append({
+                "symbol": order_request.symbol,
+                "strategy_bucket": getattr(order_request, "strategy_bucket", "unassigned"),
+                "reason": str(exc),
+            })
+    return wrap_success({
+        "approved": len(failed) == 0,
+        "created": created,
+        "failed": failed,
+        "validation": validation,
+    }, confidence_score=1.0 if not failed else 0.5)
+
+
 @app.get("/jobs/{job_id}", response_model=StandardAgentResponse[ExecutionJob])
 async def get_execution_job(job_id: Union[int, str], service: ExecutionService = Depends(get_execution_service)):
     job = await service.get_execution_job(job_id)
