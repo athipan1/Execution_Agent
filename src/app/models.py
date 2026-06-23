@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field, ConfigDict, model_validator
-from typing import Optional, Any, Generic, TypeVar, Union, Dict, List
+from typing import Optional, Any, Generic, TypeVar, Union, Dict, List, Literal
 from enum import Enum
 from datetime import datetime, timezone
 
@@ -36,6 +36,8 @@ class RiskApprovalStatus(str, Enum):
     REVOKED = "revoked"
     EXPIRED = "expired"
 
+StrategyBucket = Literal["core_dividend", "value_rebound", "news_momentum", "unassigned"]
+
 class CreateOrderRequest(BaseModel):
     trade_id: Union[int, str] = Field(..., description="Globally unique trade ID")
     account_id: Union[int, str]
@@ -45,6 +47,7 @@ class CreateOrderRequest(BaseModel):
     price: Optional[float] = None
     quantity: int
     time_in_force: TimeInForce = TimeInForce.GTC
+    strategy_bucket: StrategyBucket = "unassigned"
     risk_approval_id: str
     final_quantity: int = Field(gt=0)
     guard_plan: Optional[Dict[str, Any]] = None
@@ -86,6 +89,7 @@ class OrderResponse(BaseModel):
     price: Optional[float] = None
     quantity: int
     time_in_force: TimeInForce
+    strategy_bucket: StrategyBucket = "unassigned"
     status: OrderStatus
     broker_order_id: Optional[str] = None
     reason: Optional[str] = None
@@ -139,6 +143,7 @@ class Order(BaseModel):
     price: Optional[float] = None
     quantity: int
     time_in_force: TimeInForce
+    strategy_bucket: StrategyBucket = "unassigned"
     status: OrderStatus = OrderStatus.PENDING
     broker_order_id: Optional[str] = None
     reason: Optional[str] = None
