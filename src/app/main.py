@@ -12,6 +12,7 @@ from app.services.execution_service import ExecutionService, RiskApprovalError
 from app.services.broker_preflight import BrokerPreflightError
 from app.services.broker_cleanup import BrokerCleanupService
 from app.services.broker_state_reconciliation import BrokerStateReconciliationService
+from app.services.bucket_order_safety import validate_bucket_order_batch
 from app.db_client import get_db_client
 from app.adapters.base import BrokerAdapter
 from app.adapters.simulator import SimulatorAdapter
@@ -105,6 +106,10 @@ def wrap_success(data: Any, confidence_score: float = 1.0) -> StandardAgentRespo
     return StandardAgentResponse(status="success", data=data, confidence_score=confidence_score)
 
 
+def _open_order_symbols(open_orders: List[Dict[str, Any]]) -> List[str]:
+    return [str(order.get("symbol") or "").upper() for order in open_orders if order.get("symbol")]
+
+
 @app.post("/execute", response_model=StandardAgentResponse[Dict[str, Any]], status_code=202)
 @app.post("/execute_trade", response_model=StandardAgentResponse[Dict[str, Any]], status_code=202, include_in_schema=False)
 async def create_order(order_request: CreateOrderRequest, service: ExecutionService = Depends(get_execution_service), idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key")):
@@ -113,6 +118,13 @@ async def create_order(order_request: CreateOrderRequest, service: ExecutionServ
     order = await service.create_order(order_request)
     job = await service.enqueue_order_execution(order)
     return wrap_success({"order": CreateOrderResponse.model_validate(order).model_dump(mode="json"), "execution_job": job.model_dump(mode="json")})
+
+
+@app.post("/execute/batch/validate", response_model=StandardAgentResponse[Dict[str, Any]])
+async def validate_execute_batch(order_requests: List[CreateOrderRequest], adapter: BrokerAdapter = Depends(get_broker_adapter)):
+    open_orders = await adapter.get_open_orders()
+    result = validate_bucket_order_batch(order_requests, existing_open_symbols=_open_order_symbols(open_orders))
+    return wrap_success(result, confidence_score=1.0 if result.get("approved") else 0.0)
 
 
 @app.get("/jobs/{job_id}", response_model=StandardAgentResponse[ExecutionJob])
