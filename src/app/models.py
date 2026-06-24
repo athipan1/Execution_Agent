@@ -84,12 +84,17 @@ class PortfolioRiskApproval(BaseModel):
     status: Optional[str] = None
     strategy_bucket: StrategyBucket = "unassigned"
     risk_approval_id: Optional[str] = None
-    final_quantity: Optional[float] = None
     approved_quantity: Optional[float] = None
+    final_quantity: Optional[float] = None
+    requested_quantity: Optional[float] = None
+    approved_value: Optional[float] = None
+    requested_value: Optional[float] = None
     target_weight: Optional[float] = None
     allocation_pct: Optional[float] = None
     target_value: Optional[float] = None
     risk_response: Dict[str, Any] = Field(default_factory=dict)
+    guard_plan: Optional[Dict[str, Any]] = None
+    protective_exit: Optional[Dict[str, Any]] = None
     execution: Optional[Dict[str, Any]] = None
     risk: Optional[Dict[str, Any]] = None
 
@@ -100,6 +105,9 @@ class PortfolioExecutionRequest(BaseModel):
     time_in_force: TimeInForce = TimeInForce.GTC
     price_by_symbol: Dict[str, float] = Field(default_factory=dict)
     default_price: Optional[float] = None
+    side_by_symbol: Dict[str, OrderSide] = Field(default_factory=dict)
+    default_side: OrderSide = OrderSide.BUY
+    trade_id_prefix: str = "portfolio"
 
 class OrderResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
