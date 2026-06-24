@@ -78,6 +78,29 @@ class TradeOrder(BaseModel):
     side: OrderSide
     order_type: OrderType = OrderType.MARKET
 
+class PortfolioRiskApproval(BaseModel):
+    symbol: str
+    approved: bool = False
+    status: Optional[str] = None
+    strategy_bucket: StrategyBucket = "unassigned"
+    risk_approval_id: Optional[str] = None
+    final_quantity: Optional[float] = None
+    approved_quantity: Optional[float] = None
+    target_weight: Optional[float] = None
+    allocation_pct: Optional[float] = None
+    target_value: Optional[float] = None
+    risk_response: Dict[str, Any] = Field(default_factory=dict)
+    execution: Optional[Dict[str, Any]] = None
+    risk: Optional[Dict[str, Any]] = None
+
+class PortfolioExecutionRequest(BaseModel):
+    account_id: Union[int, str]
+    approvals: List[PortfolioRiskApproval]
+    order_type: OrderType = OrderType.MARKET
+    time_in_force: TimeInForce = TimeInForce.GTC
+    price_by_symbol: Dict[str, float] = Field(default_factory=dict)
+    default_price: Optional[float] = None
+
 class OrderResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     order_id: int
