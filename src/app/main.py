@@ -6,6 +6,7 @@ from typing import Optional, Any, Dict, List, Union
 from app.models import (
     CreateOrderRequest, CreateOrderResponse, Order, OrderStatus,
     StandardAgentResponse, ErrorDetail, HealthResponse, ExecutionJob,
+    ExecutionJobStatus,
     ReconciliationReport,
 )
 from app.services.execution_service import ExecutionService, RiskApprovalError
@@ -50,6 +51,12 @@ def _validate_broker_mode() -> str:
 def _ensure_trading_enabled() -> None:
     if not settings.TRADING_ENABLED:
         raise HTTPException(status_code=423, detail="Trading is disabled by TRADING_ENABLED=false.")
+
+
+def _should_process_batch_now(auto_process: Optional[bool]) -> bool:
+    if auto_process is not None:
+        return bool(auto_process) and _trading_mode() == "PAPER"
+    return _trading_mode() == "PAPER"
 
 
 def get_broker_adapter() -> BrokerAdapter:
@@ -110,6 +117,40 @@ def _open_order_symbols(open_orders: List[Dict[str, Any]]) -> List[str]:
     return [str(order.get("symbol") or "").upper() for order in open_orders if order.get("symbol")]
 
 
+def _order_response_payload(order: Order) -> Dict[str, Any]:
+    return CreateOrderResponse.model_validate(order).model_dump(mode="json")
+
+
+async def _process_order_now(service: ExecutionService, order: Order, job: ExecutionJob) -> tuple[Order, ExecutionJob]:
+    latest_order = await service.start_order_execution(order)
+    if latest_order.status in [OrderStatus.PLACED, OrderStatus.PARTIALLY_FILLED, OrderStatus.EXECUTED]:
+        latest_job = await service.db_client.update_execution_job(job.job_id, {"status": ExecutionJobStatus.SUCCEEDED, "last_error": None})
+    elif latest_order.status == OrderStatus.FAILED:
+        latest_job = await service.db_client.update_execution_job(job.job_id, {"status": ExecutionJobStatus.FAILED, "last_error": latest_order.reason or "Order execution failed"})
+    else:
+        latest_job = await service.db_client.update_execution_job(job.job_id, {"status": ExecutionJobStatus.QUEUED, "last_error": f"Order remained in status {latest_order.status}"})
+    return latest_order, latest_job
+
+
+def _created_batch_row(order_request: CreateOrderRequest, order: Order, job: ExecutionJob, *, processed_now: bool) -> Dict[str, Any]:
+    order_payload = _order_response_payload(order)
+    return {
+        "symbol": order.symbol,
+        "strategy_bucket": getattr(order, "strategy_bucket", getattr(order_request, "strategy_bucket", "unassigned")),
+        "quantity": order.quantity,
+        "final_quantity": order_request.final_quantity,
+        "risk_approval_id": order_request.risk_approval_id,
+        "order_id": order.order_id,
+        "trade_id": order.trade_id,
+        "status": str(order.status),
+        "broker_order_id": order.broker_order_id,
+        "reason": order.reason,
+        "processed_now": processed_now,
+        "order": order_payload,
+        "execution_job": job.model_dump(mode="json"),
+    }
+
+
 @app.post("/execute", response_model=StandardAgentResponse[Dict[str, Any]], status_code=202)
 @app.post("/execute_trade", response_model=StandardAgentResponse[Dict[str, Any]], status_code=202, include_in_schema=False)
 async def create_order(order_request: CreateOrderRequest, service: ExecutionService = Depends(get_execution_service), idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key")):
@@ -117,7 +158,7 @@ async def create_order(order_request: CreateOrderRequest, service: ExecutionServ
     order_request.trade_id = idempotency_key or order_request.trade_id
     order = await service.create_order(order_request)
     job = await service.enqueue_order_execution(order)
-    return wrap_success({"order": CreateOrderResponse.model_validate(order).model_dump(mode="json"), "execution_job": job.model_dump(mode="json")})
+    return wrap_success({"order": _order_response_payload(order), "execution_job": job.model_dump(mode="json")})
 
 
 @app.post("/execute/batch/validate", response_model=StandardAgentResponse[Dict[str, Any]])
@@ -128,33 +169,35 @@ async def validate_execute_batch(order_requests: List[CreateOrderRequest], adapt
 
 
 @app.post("/execute/batch", response_model=StandardAgentResponse[Dict[str, Any]], status_code=202)
-async def create_order_batch(order_requests: List[CreateOrderRequest], service: ExecutionService = Depends(get_execution_service), adapter: BrokerAdapter = Depends(get_broker_adapter)):
+async def create_order_batch(order_requests: List[CreateOrderRequest], auto_process: Optional[bool] = None, service: ExecutionService = Depends(get_execution_service), adapter: BrokerAdapter = Depends(get_broker_adapter)):
     _ensure_trading_enabled()
     open_orders = await adapter.get_open_orders()
     validation = validate_bucket_order_batch(order_requests, existing_open_symbols=_open_order_symbols(open_orders))
     if not validation.get("approved"):
-        return wrap_success({"approved": False, "created": [], "failed": [], "validation": validation}, confidence_score=0.0)
+        return wrap_success({"approved": False, "created": [], "failed": [], "validation": validation, "auto_process": False}, confidence_score=0.0)
 
+    process_now = _should_process_batch_now(auto_process)
     created: List[Dict[str, Any]] = []
     failed: List[Dict[str, Any]] = []
     for order_request in order_requests:
         try:
             order = await service.create_order(order_request)
             job = await service.enqueue_order_execution(order)
-            created.append({
-                "symbol": order.symbol,
-                "strategy_bucket": getattr(order, "strategy_bucket", "unassigned"),
-                "order": CreateOrderResponse.model_validate(order).model_dump(mode="json"),
-                "execution_job": job.model_dump(mode="json"),
-            })
+            if process_now:
+                order, job = await _process_order_now(service, order, job)
+            created.append(_created_batch_row(order_request, order, job, processed_now=process_now))
         except Exception as exc:
             failed.append({
                 "symbol": order_request.symbol,
                 "strategy_bucket": getattr(order_request, "strategy_bucket", "unassigned"),
+                "quantity": getattr(order_request, "quantity", None),
+                "final_quantity": getattr(order_request, "final_quantity", None),
+                "risk_approval_id": getattr(order_request, "risk_approval_id", None),
                 "reason": str(exc),
             })
     return wrap_success({
         "approved": len(failed) == 0,
+        "auto_process": process_now,
         "created": created,
         "failed": failed,
         "validation": validation,
@@ -264,19 +307,10 @@ async def broker_reconcile(account_id: int = 1, push_to_database: bool = True, s
     return wrap_success(await service.reconcile(account_id=account_id, push_to_database=push_to_database))
 
 
-def get_alpaca_adapter() -> AlpacaAdapter:
-    return AlpacaAdapter()
-
-
 @app.get("/health", response_model=StandardAgentResponse[HealthResponse])
-async def health_check(adapter: BrokerAdapter = Depends(get_broker_adapter)):
-    broker_connected = await adapter.check_connection()
-    return wrap_success(HealthResponse(status="healthy" if broker_connected else "degraded", broker_connected=broker_connected, mode=_broker_mode()))
-
-
-@app.get("/health/alpaca", response_model=StandardAgentResponse[HealthResponse])
-async def health_check_alpaca(adapter: AlpacaAdapter = Depends(get_alpaca_adapter)):
-    connected = await adapter.check_connection()
-    if not connected:
-        raise HTTPException(status_code=503, detail="Could not connect to Alpaca.")
-    return wrap_success(HealthResponse(status="healthy", broker_connected=True, mode="ALPACA"))
+async def health(adapter: BrokerAdapter = Depends(get_broker_adapter)):
+    try:
+        connected = await adapter.is_connected()
+    except Exception:
+        connected = False
+    return wrap_success(HealthResponse(status="healthy", broker_connected=connected, mode=_broker_mode()))
