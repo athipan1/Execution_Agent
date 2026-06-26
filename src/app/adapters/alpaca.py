@@ -106,7 +106,11 @@ class AlpacaAdapter(BrokerAdapter):
                 return {"status": OrderStatus.CANCELLED}
             logger.error(
                 "Failed to cancel Alpaca order.",
-                extra={"broker_order_id": broker_order_id, "status_code": response.status_code, "response": response.text}
+                extra={
+                    "broker_order_id": broker_order_id,
+                    "status_code": response.status_code,
+                    "response": response.text,
+                },
             )
             return {"status": "error", "message": f"Alpaca API error: {response.text}"}
         except httpx.RequestError as e:
@@ -129,24 +133,46 @@ class AlpacaAdapter(BrokerAdapter):
 
     def _map_alpaca_order_to_internal(self, alpaca_order: dict) -> dict:
         status_map = {
+            # Broker accepted / working states
             "new": OrderStatus.PLACED,
             "accepted": OrderStatus.PLACED,
+            "pending_new": OrderStatus.PLACED,
+            "accepted_for_bidding": OrderStatus.PLACED,
+            "held": OrderStatus.PLACED,
+            "stopped": OrderStatus.PLACED,
+            "suspended": OrderStatus.PLACED,
+            "calculated": OrderStatus.PLACED,
+            "done_for_day": OrderStatus.PLACED,
+            "pending_cancel": OrderStatus.PLACED,
+            "pending_replace": OrderStatus.PLACED,
+
+            # Fill states
             "partially_filled": OrderStatus.PARTIALLY_FILLED,
             "filled": OrderStatus.EXECUTED,
+
+            # Terminal states
             "canceled": OrderStatus.CANCELLED,
             "expired": OrderStatus.FAILED,
             "rejected": OrderStatus.FAILED,
-            "pending_cancel": OrderStatus.PLACED,
-            "pending_replace": OrderStatus.PLACED,
         }
 
-        alpaca_status = alpaca_order.get("status")
-        internal_status = status_map.get(alpaca_status, OrderStatus.FAILED)
+        alpaca_status = str(alpaca_order.get("status") or "").strip().lower()
+        broker_order_id = alpaca_order.get("id")
+
+        internal_status = status_map.get(alpaca_status)
+
+        if internal_status is None:
+            # สำคัญ:
+            # ถ้า Alpaca ส่ง broker order id กลับมา แปลว่า broker รับ order แล้ว
+            # ดังนั้นอย่าตีเป็น FAILED ทันที เพราะจะทำให้ report ภายในหลอกว่า order ล้มเหลว
+            # ทั้งที่ broker อาจสร้าง position/stop order สำเร็จแล้ว
+            internal_status = OrderStatus.PLACED if broker_order_id else OrderStatus.FAILED
 
         update_data = {
             "status": internal_status,
-            "broker_order_id": alpaca_order["id"],
+            "broker_order_id": broker_order_id,
             "executed_quantity": int(float(alpaca_order.get("filled_qty", 0) or 0)),
+            "broker_status": alpaca_status,
         }
 
         if alpaca_order.get("filled_avg_price"):
@@ -178,7 +204,7 @@ class AlpacaAdapter(BrokerAdapter):
                 return {
                     "status": OrderStatus.FAILED,
                     "reason": f"Alpaca API error: {response.text}",
-                    "status_code": response.status_code
+                    "status_code": response.status_code,
                 }
 
             broker_order = response.json()
@@ -187,7 +213,7 @@ class AlpacaAdapter(BrokerAdapter):
             logger.error("Failed to send request to Alpaca.", extra={"error": str(e)})
             return {
                 "status": OrderStatus.FAILED,
-                "reason": f"Request failed: {str(e)}"
+                "reason": f"Request failed: {str(e)}",
             }
 
     async def get_account(self) -> Dict[str, Any]:
@@ -252,11 +278,17 @@ class AlpacaAdapter(BrokerAdapter):
             logger.info("Alpaca connection check successful. Account details retrieved.")
             return True
         except httpx.RequestError as e:
-            logger.error("Alpaca connection check failed: Could not connect to account endpoint.", extra={"error": str(e)})
+            logger.error(
+                "Alpaca connection check failed: Could not connect to account endpoint.",
+                extra={"error": str(e)},
+            )
             return False
         except httpx.HTTPStatusError as e:
             logger.error(
                 "Alpaca connection check failed: Invalid response from account endpoint.",
-                extra={"status_code": e.response.status_code, "response": e.response.text},
+                extra={
+                    "status_code": e.response.status_code,
+                    "response": e.response.text,
+                },
             )
             return False
