@@ -346,9 +346,9 @@ async def reconcile_broker_state(max_age_hours: float = 24.0, cleanup_dry_run: b
     return wrap_success(await reconciliation_service.reconcile_state(max_age_hours=max_age_hours, cleanup_dry_run=cleanup_dry_run))
 
 
-@app.get("/health", response_model=HealthResponse)
+@app.get("/health", response_model=StandardAgentResponse[HealthResponse])
 async def health_check(adapter: BrokerAdapter = Depends(get_broker_adapter)):
-    return HealthResponse(status="healthy", broker_connected=await adapter.check_connection(), mode=_trading_mode())
+    return wrap_success(HealthResponse(status="healthy", broker_connected=await adapter.check_connection(), mode=_trading_mode()))
 
 
 @app.get("/health/alpaca", response_model=StandardAgentResponse[Dict[str, Any]])
