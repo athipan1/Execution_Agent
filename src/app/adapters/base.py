@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from app.models import Order, TradeOrder
-from typing import Callable, Awaitable, Any, Dict, List
+from typing import Callable, Awaitable, Any, Dict, List, Optional
 
 # Define a type hint for the asynchronous callback function that the
 # execution service will provide to the adapter.
@@ -14,9 +14,10 @@ class BrokerAdapter(ABC):
     """
 
     @abstractmethod
-    async def place_order(self, order: Order, update_callback: StatusUpdateCallable):
+    async def place_order(self, order: Order, update_callback: StatusUpdateCallable) -> Optional[Dict[str, Any]]:
         """
-        Places an order and provides asynchronous status updates via a callback.
+        Places an order, provides asynchronous status updates via a callback,
+        and returns the latest broker placement update when available.
         """
         ...
 
