@@ -323,6 +323,11 @@ async def get_portfolio(adapter: BrokerAdapter = Depends(get_broker_adapter)):
     return wrap_success({"mode": _broker_mode(), "trading_mode": _trading_mode(), "trading_enabled": settings.TRADING_ENABLED, "account": account, "positions": positions, "open_orders": open_orders, "position_count": len(positions), "open_order_count": len(open_orders)})
 
 
+@app.get("/broker/state", response_model=StandardAgentResponse[Dict[str, Any]])
+async def get_broker_state(account_id: Union[int, str] = 1, reconciliation_service: BrokerStateReconciliationService = Depends(get_broker_state_reconciliation_service)):
+    return wrap_success(await reconciliation_service.collect_broker_state(account_id=account_id))
+
+
 @app.get("/broker/preflight", response_model=StandardAgentResponse[Dict[str, Any]])
 async def broker_preflight(service: ExecutionService = Depends(get_execution_service)):
     return wrap_success(await service.broker_preflight_snapshot())
