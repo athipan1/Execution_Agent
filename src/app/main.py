@@ -341,9 +341,20 @@ async def cleanup_stale_open_orders(max_age_hours: float = 24.0, dry_run: bool =
     return wrap_success(await cleanup_service.cleanup_stale_open_orders(max_age_hours=max_age_hours, dry_run=dry_run))
 
 
+async def _run_broker_state_reconcile(account_id: Union[int, str] = 1, push_to_database: bool = True, reconciliation_service: BrokerStateReconciliationService | None = None) -> Dict[str, Any]:
+    if reconciliation_service is None:
+        reconciliation_service = get_broker_state_reconciliation_service()
+    return await reconciliation_service.reconcile(account_id=account_id, push_to_database=push_to_database)
+
+
+@app.post("/broker/reconcile", response_model=StandardAgentResponse[Dict[str, Any]])
+async def broker_reconcile(account_id: Union[int, str] = 1, push_to_database: bool = True, reconciliation_service: BrokerStateReconciliationService = Depends(get_broker_state_reconciliation_service)):
+    return wrap_success(await _run_broker_state_reconcile(account_id=account_id, push_to_database=push_to_database, reconciliation_service=reconciliation_service))
+
+
 @app.post("/broker/reconcile-state", response_model=StandardAgentResponse[Dict[str, Any]])
-async def reconcile_broker_state(max_age_hours: float = 24.0, cleanup_dry_run: bool = True, reconciliation_service: BrokerStateReconciliationService = Depends(get_broker_state_reconciliation_service)):
-    return wrap_success(await reconciliation_service.reconcile_state(max_age_hours=max_age_hours, cleanup_dry_run=cleanup_dry_run))
+async def reconcile_broker_state(account_id: Union[int, str] = 1, push_to_database: bool = True, reconciliation_service: BrokerStateReconciliationService = Depends(get_broker_state_reconciliation_service)):
+    return wrap_success(await _run_broker_state_reconcile(account_id=account_id, push_to_database=push_to_database, reconciliation_service=reconciliation_service))
 
 
 @app.get("/health", response_model=StandardAgentResponse[HealthResponse])
