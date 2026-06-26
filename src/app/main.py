@@ -121,6 +121,45 @@ def _order_response_payload(order: Order) -> Dict[str, Any]:
     return CreateOrderResponse.model_validate(order).model_dump(mode="json")
 
 
+def _order_request_diagnostics(order_request: CreateOrderRequest) -> Dict[str, Any]:
+    return {
+        "trade_id": order_request.trade_id,
+        "account_id": order_request.account_id,
+        "symbol": order_request.symbol,
+        "side": str(order_request.side),
+        "order_type": str(order_request.order_type),
+        "price": order_request.price,
+        "quantity": order_request.quantity,
+        "final_quantity": order_request.final_quantity,
+        "time_in_force": str(order_request.time_in_force),
+        "strategy_bucket": order_request.strategy_bucket,
+        "risk_approval_id": order_request.risk_approval_id,
+        "has_guard_plan": bool(order_request.guard_plan),
+        "has_protective_exit": bool(order_request.protective_exit),
+        "guard_plan": order_request.guard_plan,
+        "protective_exit": order_request.protective_exit,
+    }
+
+
+def _execution_failure_detail(order_request: CreateOrderRequest, order: Order, job: ExecutionJob, *, processed_now: bool) -> Optional[Dict[str, Any]]:
+    if order.status != OrderStatus.FAILED and job.status != ExecutionJobStatus.FAILED:
+        return None
+    reason = order.reason or job.last_error or "Order execution failed without a broker reason."
+    failed_step = "broker_submission" if processed_now else "execution_queue"
+    return {
+        "failed_step": failed_step,
+        "reason": reason,
+        "broker_mode": _broker_mode(),
+        "trading_mode": _trading_mode(),
+        "order_status": str(order.status),
+        "job_status": str(job.status),
+        "job_last_error": job.last_error,
+        "broker_order_id": order.broker_order_id,
+        "order_request": _order_request_diagnostics(order_request),
+        "diagnostic_hint": "Inspect broker response in reason/job_last_error. If broker_order_id is missing, the broker rejected or never accepted the order.",
+    }
+
+
 async def _process_order_now(service: ExecutionService, order: Order, job: ExecutionJob) -> tuple[Order, ExecutionJob]:
     latest_order = await service.start_order_execution(order)
     if latest_order.status in [OrderStatus.PLACED, OrderStatus.PARTIALLY_FILLED, OrderStatus.EXECUTED]:
@@ -134,7 +173,8 @@ async def _process_order_now(service: ExecutionService, order: Order, job: Execu
 
 def _created_batch_row(order_request: CreateOrderRequest, order: Order, job: ExecutionJob, *, processed_now: bool) -> Dict[str, Any]:
     order_payload = _order_response_payload(order)
-    return {
+    failure_detail = _execution_failure_detail(order_request, order, job, processed_now=processed_now)
+    row = {
         "symbol": order.symbol,
         "strategy_bucket": getattr(order, "strategy_bucket", getattr(order_request, "strategy_bucket", "unassigned")),
         "quantity": order.quantity,
@@ -149,6 +189,9 @@ def _created_batch_row(order_request: CreateOrderRequest, order: Order, job: Exe
         "order": order_payload,
         "execution_job": job.model_dump(mode="json"),
     }
+    if failure_detail:
+        row["failure_detail"] = failure_detail
+    return row
 
 
 @app.post("/execute", response_model=StandardAgentResponse[Dict[str, Any]], status_code=202)
@@ -185,7 +228,11 @@ async def create_order_batch(order_requests: List[CreateOrderRequest], auto_proc
             job = await service.enqueue_order_execution(order)
             if process_now:
                 order, job = await _process_order_now(service, order, job)
-            created.append(_created_batch_row(order_request, order, job, processed_now=process_now))
+            row = _created_batch_row(order_request, order, job, processed_now=process_now)
+            if order.status == OrderStatus.FAILED or job.status == ExecutionJobStatus.FAILED:
+                failed.append(row)
+            else:
+                created.append(row)
         except Exception as exc:
             failed.append({
                 "symbol": order_request.symbol,
@@ -194,6 +241,13 @@ async def create_order_batch(order_requests: List[CreateOrderRequest], auto_proc
                 "final_quantity": getattr(order_request, "final_quantity", None),
                 "risk_approval_id": getattr(order_request, "risk_approval_id", None),
                 "reason": str(exc),
+                "failure_detail": {
+                    "failed_step": "order_create_or_enqueue",
+                    "reason": str(exc),
+                    "broker_mode": _broker_mode(),
+                    "trading_mode": _trading_mode(),
+                    "order_request": _order_request_diagnostics(order_request),
+                },
             })
     return wrap_success({
         "approved": len(failed) == 0,
@@ -279,38 +333,34 @@ async def broker_order_preflight(order_id: int, service: ExecutionService = Depe
     order = await service.db_client.get_order_by_order_id(order_id)
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
-    return wrap_success(await service.run_broker_preflight(order))
+    return wrap_success(await service.broker_preflight_snapshot(order))
 
 
-@app.get("/broker/cleanup/status", response_model=StandardAgentResponse[Dict[str, Any]])
-async def broker_cleanup_status(max_age_minutes: Optional[int] = None, service: BrokerCleanupService = Depends(get_broker_cleanup_service)):
-    return wrap_success(await service.cleanup_status(max_age_minutes=max_age_minutes))
+@app.post("/broker/cleanup/stale-open-orders", response_model=StandardAgentResponse[Dict[str, Any]])
+async def cleanup_stale_open_orders(max_age_hours: float = 24.0, dry_run: bool = True, cleanup_service: BrokerCleanupService = Depends(get_broker_cleanup_service)):
+    return wrap_success(await cleanup_service.cleanup_stale_open_orders(max_age_hours=max_age_hours, dry_run=dry_run))
 
 
-@app.post("/broker/orders/cancel-stale", response_model=StandardAgentResponse[Dict[str, Any]])
-async def broker_cancel_stale_orders(dry_run: bool = True, max_age_minutes: Optional[int] = None, service: BrokerCleanupService = Depends(get_broker_cleanup_service)):
-    return wrap_success(await service.cancel_stale_open_orders(max_age_minutes=max_age_minutes, dry_run=dry_run))
+@app.post("/broker/reconcile-state", response_model=StandardAgentResponse[Dict[str, Any]])
+async def reconcile_broker_state(max_age_hours: float = 24.0, cleanup_dry_run: bool = True, reconciliation_service: BrokerStateReconciliationService = Depends(get_broker_state_reconciliation_service)):
+    return wrap_success(await reconciliation_service.reconcile_state(max_age_hours=max_age_hours, cleanup_dry_run=cleanup_dry_run))
 
 
-@app.post("/broker/orders/cancel-all-open", response_model=StandardAgentResponse[Dict[str, Any]])
-async def broker_cancel_all_open_orders(dry_run: bool = True, service: BrokerCleanupService = Depends(get_broker_cleanup_service)):
-    return wrap_success(await service.cancel_all_open_orders(dry_run=dry_run))
+@app.get("/health", response_model=HealthResponse)
+async def health_check(adapter: BrokerAdapter = Depends(get_broker_adapter)):
+    return HealthResponse(status="healthy", broker_connected=await adapter.check_connection(), mode=_trading_mode())
 
 
-@app.get("/broker/state", response_model=StandardAgentResponse[Dict[str, Any]])
-async def broker_state(account_id: int = 1, service: BrokerStateReconciliationService = Depends(get_broker_state_reconciliation_service)):
-    return wrap_success(await service.collect_broker_state(account_id=account_id))
-
-
-@app.post("/broker/reconcile", response_model=StandardAgentResponse[Dict[str, Any]])
-async def broker_reconcile(account_id: int = 1, push_to_database: bool = True, service: BrokerStateReconciliationService = Depends(get_broker_state_reconciliation_service)):
-    return wrap_success(await service.reconcile(account_id=account_id, push_to_database=push_to_database))
-
-
-@app.get("/health", response_model=StandardAgentResponse[HealthResponse])
-async def health(adapter: BrokerAdapter = Depends(get_broker_adapter)):
+@app.get("/health/alpaca", response_model=StandardAgentResponse[Dict[str, Any]])
+async def alpaca_health():
+    adapter = AlpacaAdapter()
     try:
-        connected = await adapter.is_connected()
-    except Exception:
-        connected = False
-    return wrap_success(HealthResponse(status="healthy", broker_connected=connected, mode=_broker_mode()))
+        account = await adapter.get_account()
+        return wrap_success({"connected": True, "broker": "ALPACA", "paper": account.get("paper"), "account_status": account.get("status"), "trading_blocked": account.get("trading_blocked"), "account_blocked": account.get("account_blocked")}, confidence_score=1.0)
+    except Exception as exc:
+        return StandardAgentResponse(status="error", data={"connected": False, "broker": "ALPACA"}, error=ErrorDetail(code="ALPACA_HEALTH_FAILED", message=str(exc)).model_dump(), confidence_score=0.0)
+
+
+@app.get("/")
+async def root():
+    return {"message": "Execution Agent is running"}
