@@ -1,3 +1,4 @@
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict, Optional
 
 from app.models import Order, OrderSide, OrderType
@@ -15,6 +16,20 @@ def _as_float(value: Any, field_name: str) -> float:
     if result <= 0:
         raise ProtectiveOrderError(f"{field_name} must be greater than zero")
     return result
+
+
+def alpaca_price(value: Any, field_name: str = "price") -> str:
+    """Return Alpaca-compatible price text.
+
+    Alpaca rejects sub-penny increments for most US equity orders. Prices at or
+    above $1 must not exceed two decimal places, while prices below $1 can use
+    up to four decimal places. Use half-up rounding so a calculated protective
+    stop like 92.984 becomes 92.98 instead of being rejected by the broker.
+    """
+    amount = Decimal(str(_as_float(value, field_name)))
+    quantum = Decimal("0.01") if amount >= Decimal("1") else Decimal("0.0001")
+    rounded = amount.quantize(quantum, rounding=ROUND_HALF_UP)
+    return format(rounded.normalize(), "f")
 
 
 def _normalize_side(value: Any) -> str:
@@ -94,7 +109,7 @@ def build_alpaca_entry_payload(order: Order, *, require_protection: bool = False
     }
 
     if order.order_type == OrderType.LIMIT and order.price:
-        payload["limit_price"] = str(order.price)
+        payload["limit_price"] = alpaca_price(order.price, "limit_price")
 
     plan = validate_protection_plan(order, required=require_protection)
     if not plan:
@@ -103,9 +118,9 @@ def build_alpaca_entry_payload(order: Order, *, require_protection: bool = False
     raw_plan = protection_plan(order) or {}
     take_profit_price = raw_plan.get("take_profit_price") or raw_plan.get("take_profit")
     payload["order_class"] = "bracket" if take_profit_price else "oto"
-    payload["stop_loss"] = {"stop_price": str(plan["trigger_price"])}
+    payload["stop_loss"] = {"stop_price": alpaca_price(plan["trigger_price"], "stop_loss.stop_price")}
 
     if take_profit_price:
-        payload["take_profit"] = {"limit_price": str(_as_float(take_profit_price, "take_profit_price"))}
+        payload["take_profit"] = {"limit_price": alpaca_price(take_profit_price, "take_profit.limit_price")}
 
     return payload
