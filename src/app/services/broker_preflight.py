@@ -55,12 +55,31 @@ def _stale_open_orders(open_orders: List[Dict[str, Any]], max_age_minutes: int) 
     return stale
 
 
+def _symbol(value: Any) -> str:
+    return str(value or "").strip().upper()
+
+
+def _split_stale_orders_by_symbol(stale_orders: List[Dict[str, Any]], order: Optional[Order]) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    if order is None:
+        return [], stale_orders
+    order_symbol = _symbol(order.symbol)
+    same_symbol = []
+    other_symbol = []
+    for item in stale_orders:
+        if _symbol(item.get("symbol")) == order_symbol:
+            same_symbol.append(item)
+        else:
+            other_symbol.append(item)
+    return same_symbol, other_symbol
+
+
 def build_broker_preflight_snapshot(account: Dict[str, Any], positions: List[Dict[str, Any]], open_orders: List[Dict[str, Any]], order: Optional[Order] = None) -> Dict[str, Any]:
     buying_power = _as_float(account.get("buying_power"), 0.0)
     cash = _as_float(account.get("cash"), 0.0)
     equity = _as_float(account.get("equity") or account.get("portfolio_value"), 0.0)
     order_notional = _order_notional(order) if order else 0.0
     stale_orders = _stale_open_orders(open_orders, int(settings.MAX_STALE_OPEN_ORDER_AGE_MINUTES))
+    same_symbol_stale_orders, other_symbol_stale_orders = _split_stale_orders_by_symbol(stale_orders, order)
     return {
         "broker": account.get("broker"),
         "paper": account.get("paper"),
@@ -79,7 +98,11 @@ def build_broker_preflight_snapshot(account: Dict[str, Any], positions: List[Dic
         "position_count": len(positions or []),
         "open_order_count": len(open_orders or []),
         "stale_open_order_count": len(stale_orders),
+        "same_symbol_stale_open_order_count": len(same_symbol_stale_orders),
+        "other_symbol_stale_open_order_count": len(other_symbol_stale_orders),
         "stale_open_orders": stale_orders,
+        "same_symbol_stale_open_orders": same_symbol_stale_orders,
+        "other_symbol_stale_open_orders": other_symbol_stale_orders,
     }
 
 
@@ -99,10 +122,13 @@ def validate_broker_preflight(account: Dict[str, Any], positions: List[Dict[str,
         if snapshot["buying_power_after_order"] < float(settings.MIN_BUYING_POWER_AFTER_ORDER):
             violations.append("insufficient_buying_power_after_order")
 
-    if settings.FAIL_ON_STALE_OPEN_ORDERS and snapshot["stale_open_order_count"] > 0:
-        violations.append("stale_open_orders_present")
-    elif snapshot["stale_open_order_count"] > 0:
-        warnings.append("stale_open_orders_present")
+    if snapshot["same_symbol_stale_open_order_count"] > 0:
+        if settings.FAIL_ON_STALE_OPEN_ORDERS:
+            violations.append("same_symbol_stale_open_orders_present")
+        else:
+            warnings.append("same_symbol_stale_open_orders_present")
+    if snapshot["other_symbol_stale_open_order_count"] > 0:
+        warnings.append("other_symbol_stale_open_orders_present")
 
     snapshot["approved"] = len(violations) == 0
     snapshot["violations"] = violations
