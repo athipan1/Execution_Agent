@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
 
 import httpx
 from fastapi.encoders import jsonable_encoder
@@ -42,7 +42,7 @@ class BrokerStateReconciliationService:
         account = await self.adapter.get_account()
         positions = await self.adapter.get_positions()
         open_orders = await self.adapter.get_open_orders()
-        order_summary = classify_open_orders(open_orders)
+        order_summary = classify_open_orders(open_orders, positions=positions)
         flags = _account_flags(account)
         return {
             "source": "execution_agent",
@@ -59,6 +59,9 @@ class BrokerStateReconciliationService:
                 "stale_order_count": order_summary.get("stale_order_count", 0),
                 "fresh_order_count": order_summary.get("fresh_order_count", 0),
                 "unknown_age_order_count": order_summary.get("unknown_age_order_count", 0),
+                "protective_order_count": order_summary.get("protective_order_count", 0),
+                "stale_entry_order_count": order_summary.get("stale_entry_order_count", 0),
+                "stale_non_entry_order_count": order_summary.get("stale_non_entry_order_count", 0),
                 **flags,
             },
             "order_classification": order_summary,
