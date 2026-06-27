@@ -342,8 +342,17 @@ async def broker_order_preflight(order_id: int, service: ExecutionService = Depe
 
 
 @app.post("/broker/cleanup/stale-open-orders", response_model=StandardAgentResponse[Dict[str, Any]])
-async def cleanup_stale_open_orders(max_age_hours: float = 24.0, dry_run: bool = True, cleanup_service: BrokerCleanupService = Depends(get_broker_cleanup_service)):
-    return wrap_success(await cleanup_service.cleanup_stale_open_orders(max_age_hours=max_age_hours, dry_run=dry_run))
+async def cleanup_stale_open_orders(
+    max_age_minutes: int = 390,
+    dry_run: bool = True,
+    include_protective: bool = False,
+    cleanup_service: BrokerCleanupService = Depends(get_broker_cleanup_service),
+):
+    return wrap_success(await cleanup_service.cancel_stale_open_orders(
+        max_age_minutes=max_age_minutes,
+        dry_run=dry_run,
+        include_protective=include_protective,
+    ))
 
 
 async def _run_broker_state_reconcile(account_id: Union[int, str] = 1, push_to_database: bool = True, reconciliation_service: BrokerStateReconciliationService | None = None) -> Dict[str, Any]:
@@ -378,5 +387,5 @@ async def alpaca_health():
 
 
 @app.get("/")
-async def root():
-    return {"message": "Execution Agent is running"}
+def read_root():
+    return {"service": "Execution Agent", "version": app.version}
