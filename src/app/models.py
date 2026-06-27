@@ -37,6 +37,8 @@ class RiskApprovalStatus(str, Enum):
     EXPIRED = "expired"
 
 StrategyBucket = Literal["core_dividend", "value_rebound", "news_momentum", "unassigned"]
+TradePlanStatus = Literal["draft", "risk_pending", "risk_approved", "manual_approval_required", "execution_ready", "rejected"]
+TradePlanSource = Literal["single_analysis", "multi_analysis", "scanner", "manual", "replay"]
 
 class CreateOrderRequest(BaseModel):
     trade_id: Union[int, str] = Field(..., description="Globally unique trade ID")
@@ -70,6 +72,88 @@ class CreateOrderRequest(BaseModel):
         if not self.guard_plan and not self.protective_exit:
             raise ValueError("guard_plan or protective_exit is required")
         return self
+
+class TradePlanRiskEnvelope(BaseModel):
+    account_equity: Optional[float] = Field(default=None, gt=0)
+    cash_available: Optional[float] = Field(default=None, ge=0)
+    max_loss_amount: float = Field(..., gt=0)
+    max_loss_pct: float = Field(..., gt=0, le=1)
+    risk_per_share: Optional[float] = Field(default=None, gt=0)
+    position_value: Optional[float] = Field(default=None, ge=0)
+    position_pct: Optional[float] = Field(default=None, ge=0, le=1)
+    reward_risk_ratio: Optional[float] = Field(default=None, gt=0)
+    session_risk_loaded: bool = False
+    portfolio_context_loaded: bool = False
+
+class TradePlanExitEnvelope(BaseModel):
+    stop_loss: Optional[float] = Field(default=None, gt=0)
+    take_profit: Optional[float] = Field(default=None, gt=0)
+    trailing_stop_pct: Optional[float] = Field(default=None, gt=0, lt=1)
+    break_even_trigger_r: Optional[float] = Field(default=None, gt=0)
+    partial_exit_pct: Optional[float] = Field(default=None, gt=0, lt=1)
+    time_stop_minutes: Optional[int] = Field(default=None, gt=0)
+    exit_reason: Optional[str] = None
+
+class TradePlanExecutionRequest(BaseModel):
+    plan_id: str
+    correlation_id: str
+    source: TradePlanSource = "single_analysis"
+    status: TradePlanStatus = "risk_approved"
+    account_id: Union[int, str]
+    symbol: str
+    side: OrderSide
+    order_type: OrderType = OrderType.MARKET
+    entry_price: Optional[float] = Field(default=None, gt=0)
+    limit_price: Optional[float] = Field(default=None, gt=0)
+    quantity: int = Field(gt=0)
+    final_quantity: Optional[int] = Field(default=None, gt=0)
+    time_in_force: TimeInForce = TimeInForce.GTC
+    strategy: str = "unassigned"
+    strategy_bucket: StrategyBucket = "unassigned"
+    final_verdict: str
+    confidence_score: float = Field(ge=0, le=1)
+    expected_r: Optional[float] = None
+    risk: TradePlanRiskEnvelope
+    exit: TradePlanExitEnvelope = Field(default_factory=TradePlanExitEnvelope)
+    risk_approval_id: str
+    manual_approval_required: bool = True
+    dry_run: bool = False
+    reasons: List[str] = Field(default_factory=list)
+    guard_plan: Dict[str, Any] = Field(default_factory=dict)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_execution_plan(self) -> "TradePlanExecutionRequest":
+        if self.order_type == OrderType.LIMIT and self.limit_price is None:
+            raise ValueError("limit_price is required when order_type is limit")
+        if not str(self.risk_approval_id).strip():
+            raise ValueError("risk_approval_id is required before execution")
+        reference_price = self.entry_price or self.limit_price
+        if reference_price is not None and self.exit.stop_loss is not None:
+            if self.side == OrderSide.BUY and self.exit.stop_loss >= reference_price:
+                raise ValueError("buy trade stop_loss must be below entry/limit price")
+            if self.side == OrderSide.SELL and self.exit.stop_loss <= reference_price:
+                raise ValueError("sell trade stop_loss must be above entry/limit price")
+        return self
+
+    def to_order_request(self) -> CreateOrderRequest:
+        protective_exit = self.exit.model_dump(mode="json")
+        guard_plan = self.guard_plan or None
+        return CreateOrderRequest(
+            trade_id=self.plan_id,
+            account_id=self.account_id,
+            symbol=self.symbol.upper(),
+            side=self.side,
+            order_type=self.order_type,
+            price=self.limit_price or self.entry_price,
+            quantity=self.final_quantity or self.quantity,
+            time_in_force=self.time_in_force,
+            strategy_bucket=self.strategy_bucket,
+            risk_approval_id=self.risk_approval_id,
+            final_quantity=self.final_quantity or self.quantity,
+            guard_plan=guard_plan,
+            protective_exit=protective_exit,
+        )
 
 class TradeOrder(BaseModel):
     trade_id: Union[int, str]
