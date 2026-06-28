@@ -53,6 +53,38 @@ def test_rejects_order_without_risk_gate(client: TestClient):
     assert response.status_code == 422
 
 
+def test_rejects_order_with_empty_risk_approval_id(client: TestClient):
+    trade_id = str(uuid.uuid4())
+    order_data = {**BASE_ORDER, "trade_id": trade_id, "risk_approval_id": "   "}
+
+    response = client.post("/execute", headers=HEADERS, json=order_data)
+    assert response.status_code == 422
+    assert "risk_approval_id" in response.text
+
+
+def test_rejects_order_without_guard_or_protective_exit(client: TestClient):
+    trade_id = str(uuid.uuid4())
+    order_data = {**BASE_ORDER, "trade_id": trade_id}
+    order_data.pop("guard_plan")
+    order_data.pop("protective_exit", None)
+
+    response = client.post("/execute", headers=HEADERS, json=order_data)
+    assert response.status_code == 422
+    assert "guard_plan or protective_exit is required" in response.text
+
+
+def test_rejects_unknown_risk_approval_before_order_creation(client: TestClient):
+    trade_id = str(uuid.uuid4())
+    order_data = {**BASE_ORDER, "trade_id": trade_id, "risk_approval_id": f"risk-missing-{trade_id}"}
+
+    response = client.post("/execute", headers=HEADERS, json=order_data)
+    assert response.status_code == 403
+    payload = response.json()
+    assert payload["status"] == "error"
+    assert payload["error"]["code"] == "RISK_APPROVAL_REJECTED"
+    assert "was not found" in payload["error"]["message"]
+
+
 def test_rejects_quantity_that_differs_from_final_quantity(client: TestClient):
     trade_id = str(uuid.uuid4())
     order_data = {**BASE_ORDER, "trade_id": trade_id, "quantity": 200, "final_quantity": 100}

@@ -32,6 +32,17 @@ class ExecutionService:
         self.db_client = db_client
         self.broker_adapter = broker_adapter
 
+    def _validate_execution_risk_gate(self, order_request: CreateOrderRequest) -> None:
+        """Fail closed before any order is persisted or sent toward broker execution."""
+        if not str(order_request.risk_approval_id or "").strip():
+            raise RiskApprovalError("risk_approval_id is required before execution.")
+        if order_request.final_quantity <= 0:
+            raise RiskApprovalError("final_quantity must be greater than zero before execution.")
+        if order_request.quantity != order_request.final_quantity:
+            raise RiskApprovalError("quantity must match final_quantity approved by Risk_Agent before execution.")
+        if not order_request.guard_plan and not order_request.protective_exit:
+            raise RiskApprovalError("guard_plan or protective_exit is required before execution.")
+
     def _validate_risk_approval(self, approval: RiskApproval, order_request: CreateOrderRequest) -> None:
         now = datetime.now(timezone.utc)
         expires_at = approval.expires_at
@@ -68,6 +79,7 @@ class ExecutionService:
         )
 
     async def verify_risk_approval(self, order_request: CreateOrderRequest) -> RiskApproval:
+        self._validate_execution_risk_gate(order_request)
         approval = await self.db_client.get_risk_approval(order_request.risk_approval_id)
         if not approval:
             self._seed_in_memory_test_approval(order_request)
@@ -94,6 +106,7 @@ class ExecutionService:
             return order.model_copy(update=updates)
 
     async def create_order(self, order_request: CreateOrderRequest) -> Order:
+        self._validate_execution_risk_gate(order_request)
         existing_order = await self.db_client.get_order_by_trade_id(order_request.trade_id)
         if existing_order:
             logger.info("Idempotent request received for existing order.", extra={"trade_id": order_request.trade_id, "order_id": existing_order.order_id})
@@ -107,7 +120,7 @@ class ExecutionService:
 
     async def enqueue_order_execution(self, order: Order) -> ExecutionJob:
         job = await self.db_client.create_execution_job(order)
-        logger.info("Execution job enqueued.", extra={"job_id": job.job_id, "order_id": job.order_id, "status": job.status})
+        logger.info("Execution job enqueued.", extra={"job_id": job.job_id, "order_id": order.order_id, "status": job.status})
         return job
 
     async def get_execution_job(self, job_id) -> Optional[ExecutionJob]:
