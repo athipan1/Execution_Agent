@@ -16,6 +16,7 @@ from app.models import (
     TradePlanExecutionRequest,
 )
 from app.services.execution_service import ExecutionService
+from app.services.order_review_plan import build_order_review_plan
 from app.services.protection_diagnostics import build_protection_diagnostics
 
 router = APIRouter()
@@ -148,3 +149,32 @@ async def broker_protection_diagnostics(
     needs_attention = diagnostics["summary"]["needs_bracket_upgrade_count"] + diagnostics["summary"]["unprotected_position_count"]
     confidence = 1.0 if needs_attention == 0 else 0.7
     return wrap_success(diagnostics, confidence_score=confidence)
+
+
+@router.post("/broker/order-review/preview", response_model=StandardAgentResponse[Dict[str, Any]])
+async def broker_order_review_preview(
+    payload: Optional[Dict[str, Any]] = None,
+    adapter: BrokerAdapter = Depends(get_broker_adapter),
+):
+    """Build a read-only preview plan for legacy stop-only protection.
+
+    This endpoint never cancels, replaces, or submits broker orders. It only
+    returns the steps that would require manual review before a future approved
+    execute path can be added.
+    """
+    reward_risk_ratio = 2.0
+    if isinstance(payload, dict) and payload.get("reward_risk_ratio") is not None:
+        try:
+            reward_risk_ratio = float(payload["reward_risk_ratio"])
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="reward_risk_ratio must be a number")
+        if reward_risk_ratio <= 0:
+            raise HTTPException(status_code=422, detail="reward_risk_ratio must be greater than zero")
+
+    positions = await adapter.get_positions()
+    open_orders = await adapter.get_open_orders()
+    diagnostics = build_protection_diagnostics(positions, open_orders)
+    preview = build_order_review_plan(diagnostics, reward_risk_ratio=reward_risk_ratio)
+    needs_attention = preview["summary"]["candidate_count"] + preview["summary"]["blocked_count"]
+    confidence = 1.0 if needs_attention == 0 else 0.7
+    return wrap_success(preview, confidence_score=confidence)
