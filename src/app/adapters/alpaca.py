@@ -254,19 +254,47 @@ class AlpacaAdapter(BrokerAdapter):
             for item in positions
         ]
 
+    def _order_snapshot(self, item: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "id": item.get("id"),
+            "symbol": item.get("symbol"),
+            "side": item.get("side"),
+            "qty": item.get("qty"),
+            "type": item.get("type"),
+            "order_class": item.get("order_class"),
+            "status": item.get("status"),
+            "stop_price": item.get("stop_price"),
+            "limit_price": item.get("limit_price"),
+            "trail_price": item.get("trail_price"),
+            "trail_percent": item.get("trail_percent"),
+            "submitted_at": item.get("submitted_at"),
+            "created_at": item.get("created_at"),
+            "legs": item.get("legs"),
+        }
+
+    async def get_broker_order(self, broker_order_id: str) -> Dict[str, Any]:
+        order = await self._get_json(f"/v2/orders/{broker_order_id}")
+        return self._order_snapshot(order)
+
     async def get_open_orders(self) -> List[Dict[str, Any]]:
-        orders = await self._get_json("/v2/orders?status=open&limit=100")
-        return [
-            {
-                "id": item.get("id"),
-                "symbol": item.get("symbol"),
-                "side": item.get("side"),
-                "qty": item.get("qty"),
-                "type": item.get("type"),
-                "order_class": item.get("order_class"),
-                "status": item.get("status"),
-                "submitted_at": item.get("submitted_at"),
-                "created_at": item.get("created_at"),
-            }
-            for item in orders
-        ]
+        orders = await self._get_json("/v2/orders?status=open&limit=100&nested=true")
+        snapshots = [self._order_snapshot(item) for item in orders]
+
+        hydrated: List[Dict[str, Any]] = []
+        for item in snapshots:
+            needs_detail = item.get("id") and not any(
+                item.get(key) not in (None, "")
+                for key in ("stop_price", "limit_price", "trail_price", "trail_percent")
+            )
+            if needs_detail:
+                try:
+                    detail = await self.get_broker_order(str(item["id"]))
+                    item = {**item, **{key: value for key, value in detail.items() if value not in (None, "")}}
+                except Exception as exc:  # pragma: no cover - defensive broker detail fallback
+                    logger.warning(
+                        "Failed to fetch full Alpaca order details; using list-order snapshot.",
+                        extra={"broker_order_id": item.get("id"), "error": str(exc)},
+                    )
+            hydrated.append(item)
+
+        return hydrated
