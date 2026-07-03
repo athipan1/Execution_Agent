@@ -58,7 +58,11 @@ class BrokerAdapter(ABC):
         """Returns currently open broker orders."""
         ...
 
-    @abstractmethod
     async def check_connection(self) -> bool:
-        """Verifies the connection to the broker."""
-        ...
+        """Verifies the connection to the broker.
+
+        Adapters can override this for a real readiness probe. The default keeps
+        legacy adapters instantiable while still reporting broker readiness as
+        unavailable until an adapter provides a concrete check.
+        """
+        return False
