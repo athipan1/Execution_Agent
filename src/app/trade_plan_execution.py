@@ -16,6 +16,7 @@ from app.models import (
     TradePlanExecutionRequest,
 )
 from app.services.execution_service import ExecutionService
+from app.services.order_review_approval_ticket import build_order_review_approval_ticket
 from app.services.order_review_plan import build_order_review_plan
 from app.services.protection_diagnostics import build_protection_diagnostics
 
@@ -178,3 +179,32 @@ async def broker_order_review_preview(
     needs_attention = preview["summary"]["candidate_count"] + preview["summary"]["blocked_count"]
     confidence = 1.0 if needs_attention == 0 else 0.7
     return wrap_success(preview, confidence_score=confidence)
+
+
+@router.post("/broker/order-review/manual-approval-ticket", response_model=StandardAgentResponse[Dict[str, Any]])
+async def broker_order_review_manual_approval_ticket(
+    payload: Optional[Dict[str, Any]] = None,
+    adapter: BrokerAdapter = Depends(get_broker_adapter),
+):
+    """Build a read-only manual approval ticket from the latest broker preview.
+
+    This endpoint freezes the proposed stop-only upgrade details for manual
+    review. It does not submit, cancel, replace, or modify broker orders.
+    """
+    reward_risk_ratio = 2.0
+    if isinstance(payload, dict) and payload.get("reward_risk_ratio") is not None:
+        try:
+            reward_risk_ratio = float(payload["reward_risk_ratio"])
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="reward_risk_ratio must be a number")
+        if reward_risk_ratio <= 0:
+            raise HTTPException(status_code=422, detail="reward_risk_ratio must be greater than zero")
+
+    positions = await adapter.get_positions()
+    open_orders = await adapter.get_open_orders()
+    diagnostics = build_protection_diagnostics(positions, open_orders)
+    preview = build_order_review_plan(diagnostics, reward_risk_ratio=reward_risk_ratio)
+    ticket = build_order_review_approval_ticket(preview, payload if isinstance(payload, dict) else None)
+    needs_attention = ticket["summary"]["ready_for_manual_approval_count"] + ticket["summary"]["blocked_count"]
+    confidence = 1.0 if needs_attention == 0 else 0.7
+    return wrap_success(ticket, confidence_score=confidence)
