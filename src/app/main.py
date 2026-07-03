@@ -164,7 +164,7 @@ def get_broker_state_reconciliation_service(
 
 async def security_middleware(request: Request, call_next):
 
-    if request.url.path in ["/health", "/health/alpaca", "/docs", "/openapi.json"]:
+    if request.url.path in ["/health", "/health/broker", "/health/alpaca", "/docs", "/openapi.json"]:
 
         return await call_next(request)
 
@@ -1094,7 +1094,33 @@ async def reconcile_broker_state(
 
 @app.get("/health", response_model=StandardAgentResponse[HealthResponse])
 
-async def health_check(adapter: BrokerAdapter = Depends(get_broker_adapter)):
+async def health_check():
+
+    """Lightweight liveness probe for Docker/Kubernetes healthchecks.
+
+    This endpoint intentionally does not instantiate broker adapters or call
+    external broker APIs. Readiness for broker connectivity is exposed through
+    /health/broker and /health/alpaca so a missing Alpaca key cannot make the
+    container look dead during simulator/e2e startup.
+    """
+
+    return wrap_success(
+
+        HealthResponse(
+
+            status="healthy",
+
+            broker_connected=False,
+
+            mode=_trading_mode(),
+
+        )
+
+    )
+
+@app.get("/health/broker", response_model=StandardAgentResponse[HealthResponse])
+
+async def broker_health_check(adapter: BrokerAdapter = Depends(get_broker_adapter)):
 
     return wrap_success(
 
@@ -1158,7 +1184,7 @@ async def alpaca_health():
 
             error=ErrorDetail(
 
-                code="ALPACA_HEALTH_FAILED",
+                code="ALPACA_HEALTH_CHECK_FAILED",
 
                 message=str(exc),
 
@@ -1167,9 +1193,3 @@ async def alpaca_health():
             confidence_score=0.0,
 
         )
-
-@app.get("/")
-
-async def root():
-
-    return {"message": "Execution Agent is running"}
