@@ -16,6 +16,7 @@ from app.models import (
     TradePlanExecutionRequest,
 )
 from app.services.execution_service import ExecutionService
+from app.services.protection_diagnostics import build_protection_diagnostics
 
 router = APIRouter()
 
@@ -130,3 +131,20 @@ async def create_order_from_trade_plan(
             order_request=order_request,
         )
     )
+
+
+@router.get("/broker/protection-diagnostics", response_model=StandardAgentResponse[Dict[str, Any]])
+async def broker_protection_diagnostics(
+    adapter: BrokerAdapter = Depends(get_broker_adapter),
+):
+    """Report protection quality for current broker positions.
+
+    This endpoint is intentionally read-only. It does not cancel orders, replace
+    orders, submit orders, or modify broker/database state.
+    """
+    positions = await adapter.get_positions()
+    open_orders = await adapter.get_open_orders()
+    diagnostics = build_protection_diagnostics(positions, open_orders)
+    needs_attention = diagnostics["summary"]["needs_bracket_upgrade_count"] + diagnostics["summary"]["unprotected_position_count"]
+    confidence = 1.0 if needs_attention == 0 else 0.7
+    return wrap_success(diagnostics, confidence_score=confidence)
