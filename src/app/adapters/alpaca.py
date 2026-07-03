@@ -79,10 +79,12 @@ class AlpacaAdapter(BrokerAdapter):
         headers = self._get_auth_headers()
         headers["Content-Type"] = "application/json"
 
+        live_mode = str(settings.TRADING_MODE or "PAPER").upper() == "LIVE"
         try:
             payload = build_alpaca_entry_payload(
                 order,
-                require_protection=str(settings.TRADING_MODE or "PAPER").upper() == "LIVE",
+                require_protection=live_mode,
+                require_bracket=live_mode,
             )
         except ProtectiveOrderError as exc:
             logger.error(
@@ -260,35 +262,11 @@ class AlpacaAdapter(BrokerAdapter):
                 "symbol": item.get("symbol"),
                 "side": item.get("side"),
                 "qty": item.get("qty"),
-                "filled_qty": item.get("filled_qty"),
                 "type": item.get("type"),
-                "time_in_force": item.get("time_in_force"),
+                "order_class": item.get("order_class"),
                 "status": item.get("status"),
                 "submitted_at": item.get("submitted_at"),
-                "limit_price": item.get("limit_price"),
-                "stop_price": item.get("stop_price"),
+                "created_at": item.get("created_at"),
             }
             for item in orders
         ]
-
-    async def check_connection(self) -> bool:
-        logger.info("Checking connection to Alpaca...")
-        try:
-            await self.get_account()
-            logger.info("Alpaca connection check successful. Account details retrieved.")
-            return True
-        except httpx.RequestError as e:
-            logger.error(
-                "Alpaca connection check failed: Could not connect to account endpoint.",
-                extra={"error": str(e)},
-            )
-            return False
-        except httpx.HTTPStatusError as e:
-            logger.error(
-                "Alpaca connection check failed: Invalid response from account endpoint.",
-                extra={
-                    "status_code": e.response.status_code,
-                    "response": e.response.text,
-                },
-            )
-            return False
