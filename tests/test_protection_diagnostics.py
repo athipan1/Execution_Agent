@@ -3,7 +3,7 @@ from app.services.protection_diagnostics import build_protection_diagnostics
 
 def test_protection_diagnostics_flags_stop_only_oto_as_needs_bracket_upgrade():
     diagnostics = build_protection_diagnostics(
-        positions=[{"symbol": "ACGL", "qty": "82"}],
+        positions=[{"symbol": "ACGL", "qty": "82", "current_price": "102.20", "avg_entry_price": "96.79"}],
         open_orders=[
             {
                 "id": "stop-1",
@@ -13,6 +13,7 @@ def test_protection_diagnostics_flags_stop_only_oto_as_needs_bracket_upgrade():
                 "type": "stop",
                 "order_class": "oto",
                 "status": "new",
+                "stop_price": "95.00",
             }
         ],
     )
@@ -26,10 +27,13 @@ def test_protection_diagnostics_flags_stop_only_oto_as_needs_bracket_upgrade():
 
     row = diagnostics["positions"][0]
     assert row["symbol"] == "ACGL"
+    assert row["current_price"] == "102.20"
+    assert row["avg_entry_price"] == "96.79"
     assert row["has_protective_stop"] is True
     assert row["has_take_profit"] is False
     assert row["protection_status"] == "stop_only"
     assert row["recommended_action"] == "needs_bracket_upgrade"
+    assert row["protective_orders"][0]["stop_price"] == "95.00"
     assert row["orders_submitted"] is False
 
 
