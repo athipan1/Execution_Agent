@@ -50,6 +50,10 @@ def _order_summary(order: Dict[str, Any]) -> Dict[str, Any]:
         "type": order.get("type") or order.get("order_type"),
         "order_class": order.get("order_class"),
         "status": order.get("status"),
+        "stop_price": order.get("stop_price") or order.get("trigger_price"),
+        "limit_price": order.get("limit_price"),
+        "trail_price": order.get("trail_price"),
+        "trail_percent": order.get("trail_percent"),
         "submitted_at": order.get("submitted_at"),
         "created_at": order.get("created_at"),
     }
@@ -117,6 +121,8 @@ def build_protection_diagnostics(
             {
                 "symbol": symbol,
                 "position_qty": position.get("qty") or position.get("quantity"),
+                "current_price": position.get("current_price"),
+                "avg_entry_price": position.get("avg_entry_price"),
                 "has_position": has_position,
                 "has_protective_stop": has_protective_stop,
                 "has_take_profit": has_take_profit,
