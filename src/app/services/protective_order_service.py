@@ -45,7 +45,12 @@ def protection_plan(order: Order) -> Optional[Dict[str, Any]]:
     return dict(plan) if isinstance(plan, dict) else None
 
 
-def validate_protection_plan(order: Order, *, required: bool = False) -> Optional[Dict[str, Any]]:
+def validate_protection_plan(
+    order: Order,
+    *,
+    required: bool = False,
+    require_take_profit: bool = False,
+) -> Optional[Dict[str, Any]]:
     """Return a normalized protective plan or raise when required/invalid.
 
     The plan comes from Risk_Agent/Manager and must describe the protective exit,
@@ -55,7 +60,7 @@ def validate_protection_plan(order: Order, *, required: bool = False) -> Optiona
     """
     plan = protection_plan(order)
     if not plan:
-        if required:
+        if required or require_take_profit:
             raise ProtectiveOrderError("guard_plan or protective_exit is required")
         return None
 
@@ -77,28 +82,45 @@ def validate_protection_plan(order: Order, *, required: bool = False) -> Optiona
         plan.get("trigger_price") or plan.get("stop_price") or plan.get("protection_price"),
         "protective trigger_price",
     )
+    take_profit_price = plan.get("take_profit_price") or plan.get("take_profit")
 
     if order.price:
         if order.side == OrderSide.BUY and trigger_price >= float(order.price):
             raise ProtectiveOrderError("buy entry stop price must be below the entry price")
         if order.side == OrderSide.SELL and trigger_price <= float(order.price):
             raise ProtectiveOrderError("sell entry stop price must be above the entry price")
+        if take_profit_price is not None:
+            take_profit_value = _as_float(take_profit_price, "take_profit_price")
+            if order.side == OrderSide.BUY and take_profit_value <= float(order.price):
+                raise ProtectiveOrderError("buy entry take_profit_price must be above the entry price")
+            if order.side == OrderSide.SELL and take_profit_value >= float(order.price):
+                raise ProtectiveOrderError("sell entry take_profit_price must be below the entry price")
+
+    if require_take_profit and take_profit_price is None:
+        raise ProtectiveOrderError("take_profit_price is required for broker-side bracket protection")
 
     return {
         "symbol": symbol,
         "side": side,
         "quantity": quantity,
         "trigger_price": trigger_price,
+        "take_profit_price": _as_float(take_profit_price, "take_profit_price") if take_profit_price is not None else None,
         "time_in_force": str(plan.get("time_in_force") or order.time_in_force.value).lower(),
         "source": plan.get("source") or "risk_guard_plan",
     }
 
 
-def build_alpaca_entry_payload(order: Order, *, require_protection: bool = False) -> Dict[str, Any]:
-    """Build an Alpaca entry order payload with broker-side stop protection.
+def build_alpaca_entry_payload(
+    order: Order,
+    *,
+    require_protection: bool = False,
+    require_bracket: bool = False,
+) -> Dict[str, Any]:
+    """Build an Alpaca entry order payload with broker-side stop/target protection.
 
-    Stop-only protection uses Alpaca's OTO order class. If a take-profit price is
-    provided in the plan, the payload is upgraded to a bracket order.
+    Stop-only protection uses Alpaca's OTO order class. LIVE broker execution can
+    pass ``require_bracket=True`` to fail closed unless both stop loss and take
+    profit are present, producing a broker-side bracket order.
     """
     payload: Dict[str, Any] = {
         "side": order.side.value,
@@ -111,12 +133,15 @@ def build_alpaca_entry_payload(order: Order, *, require_protection: bool = False
     if order.order_type == OrderType.LIMIT and order.price:
         payload["limit_price"] = alpaca_price(order.price, "limit_price")
 
-    plan = validate_protection_plan(order, required=require_protection)
+    plan = validate_protection_plan(
+        order,
+        required=require_protection or require_bracket,
+        require_take_profit=require_bracket,
+    )
     if not plan:
         return payload
 
-    raw_plan = protection_plan(order) or {}
-    take_profit_price = raw_plan.get("take_profit_price") or raw_plan.get("take_profit")
+    take_profit_price = plan.get("take_profit_price")
     payload["order_class"] = "bracket" if take_profit_price else "oto"
     payload["stop_loss"] = {"stop_price": alpaca_price(plan["trigger_price"], "stop_loss.stop_price")}
 

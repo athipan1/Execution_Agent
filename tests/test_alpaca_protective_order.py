@@ -30,14 +30,15 @@ def protected_order(**overrides):
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_alpaca_entry_payload_includes_oto_stop_loss():
+async def test_paper_alpaca_entry_payload_allows_oto_stop_loss():
     adapter = AlpacaAdapter()
     order_request = respx.post(f"{settings.ALPACA_API_URL}/v2/orders").mock(
         return_value=Response(200, json={"id": "broker-order-id-123", "status": "accepted"})
     )
 
     update_callback = AsyncMock()
-    await adapter.place_order(protected_order(), update_callback)
+    with patch("app.adapters.alpaca.settings.TRADING_MODE", "PAPER"):
+        await adapter.place_order(protected_order(), update_callback)
 
     assert order_request.called
     payload = order_request.calls.last.request.content.decode("utf-8")
@@ -48,6 +49,7 @@ async def test_alpaca_entry_payload_includes_oto_stop_loss():
         "status": OrderStatus.PLACED,
         "broker_order_id": "broker-order-id-123",
         "executed_quantity": 0,
+        "broker_status": "accepted",
     })
 
 
@@ -67,6 +69,54 @@ async def test_live_alpaca_refuses_unprotected_order_before_broker_call():
     update = update_callback.await_args.args[0]
     assert update["status"] == OrderStatus.FAILED
     assert "guard_plan" in update["reason"]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_live_alpaca_refuses_sl_only_order_before_broker_call():
+    adapter = AlpacaAdapter()
+    order_route = respx.post(f"{settings.ALPACA_API_URL}/v2/orders").mock(
+        return_value=Response(200, json={"id": "should-not-be-called", "status": "accepted"})
+    )
+
+    update_callback = AsyncMock()
+    with patch("app.adapters.alpaca.settings.TRADING_MODE", "LIVE"):
+        await adapter.place_order(protected_order(), update_callback)
+
+    assert not order_route.called
+    update = update_callback.await_args.args[0]
+    assert update["status"] == OrderStatus.FAILED
+    assert "take_profit_price" in update["reason"]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_live_alpaca_submits_bracket_order_when_tp_and_sl_exist():
+    adapter = AlpacaAdapter()
+    order_request = respx.post(f"{settings.ALPACA_API_URL}/v2/orders").mock(
+        return_value=Response(200, json={"id": "broker-bracket-id-123", "status": "accepted"})
+    )
+
+    bracket_order = protected_order(
+        guard_plan={"symbol": "AAPL", "side": "sell", "quantity": 10, "trigger_price": 90, "take_profit_price": 120}
+    )
+    update_callback = AsyncMock()
+    with patch("app.adapters.alpaca.settings.TRADING_MODE", "LIVE"):
+        await adapter.place_order(bracket_order, update_callback)
+
+    assert order_request.called
+    payload = order_request.calls.last.request.content.decode("utf-8")
+    assert '"order_class":"bracket"' in payload
+    assert '"stop_loss":{"stop_price":"90.0"}' in payload
+    assert '"take_profit":{"limit_price":"120.0"}' in payload
+
+    update_callback.assert_awaited_once_with({
+        "order_id": 1,
+        "status": OrderStatus.PLACED,
+        "broker_order_id": "broker-bracket-id-123",
+        "executed_quantity": 0,
+        "broker_status": "accepted",
+    })
 
 
 @pytest.mark.asyncio
