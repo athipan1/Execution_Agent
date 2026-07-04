@@ -57,6 +57,34 @@ class AlpacaAdapter(BrokerAdapter):
         response.raise_for_status()
         return response.json()
 
+    async def _post_order_payload(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        headers = self._get_auth_headers()
+        headers["Content-Type"] = "application/json"
+        try:
+            response = await self._client.post(self._url("/v2/orders"), headers=headers, json=payload)
+            if response.is_error:
+                return {
+                    "status": OrderStatus.FAILED,
+                    "reason": f"Alpaca API error: {response.text}",
+                    "status_code": response.status_code,
+                    "payload": payload,
+                }
+            broker_order = response.json()
+            mapped = self._map_alpaca_order_to_internal(broker_order)
+            mapped["symbol"] = broker_order.get("symbol") or payload.get("symbol")
+            mapped["side"] = broker_order.get("side") or payload.get("side")
+            mapped["qty"] = broker_order.get("qty") or payload.get("qty")
+            mapped["order_class"] = broker_order.get("order_class") or payload.get("order_class")
+            mapped["raw_order"] = broker_order
+            return mapped
+        except httpx.RequestError as e:
+            logger.error("Failed to send Alpaca order payload.", extra={"error": str(e), "payload": payload})
+            return {
+                "status": OrderStatus.FAILED,
+                "reason": f"Request failed: {str(e)}",
+                "payload": payload,
+            }
+
     async def place_order(self, order: Order, update_callback: StatusUpdateCallable):
         response = await self._make_order_request(order)
 
@@ -105,7 +133,7 @@ class AlpacaAdapter(BrokerAdapter):
         try:
             response = await self._client.delete(self._url(f"/v2/orders/{broker_order_id}"), headers=headers)
             if response.status_code == 204:
-                return {"status": OrderStatus.CANCELLED}
+                return {"status": OrderStatus.CANCELLED, "broker_order_id": broker_order_id}
             logger.error(
                 "Failed to cancel Alpaca order.",
                 extra={
@@ -114,10 +142,55 @@ class AlpacaAdapter(BrokerAdapter):
                     "response": response.text,
                 },
             )
-            return {"status": "error", "message": f"Alpaca API error: {response.text}"}
+            return {"status": "error", "message": f"Alpaca API error: {response.text}", "broker_order_id": broker_order_id}
         except httpx.RequestError as e:
             logger.error("Request error while cancelling Alpaca order.", extra={"error": str(e)})
-            return {"status": "error", "message": str(e)}
+            return {"status": "error", "message": str(e), "broker_order_id": broker_order_id}
+
+    async def submit_exit_bracket_order(
+        self,
+        *,
+        symbol: str,
+        qty: Any,
+        side: str,
+        stop_price: Any,
+        take_profit_price: Any,
+        client_order_id: str | None = None,
+    ) -> dict:
+        payload: Dict[str, Any] = {
+            "symbol": symbol.upper(),
+            "qty": str(qty),
+            "side": side,
+            "type": "limit",
+            "time_in_force": "gtc",
+            "order_class": "oco",
+            "take_profit": {"limit_price": str(take_profit_price)},
+            "stop_loss": {"stop_price": str(stop_price)},
+        }
+        if client_order_id:
+            payload["client_order_id"] = client_order_id
+        return await self._post_order_payload(payload)
+
+    async def submit_protective_stop_order(
+        self,
+        *,
+        symbol: str,
+        qty: Any,
+        side: str,
+        stop_price: Any,
+        client_order_id: str | None = None,
+    ) -> dict:
+        payload: Dict[str, Any] = {
+            "symbol": symbol.upper(),
+            "qty": str(qty),
+            "side": side,
+            "type": "stop",
+            "time_in_force": "gtc",
+            "stop_price": str(stop_price),
+        }
+        if client_order_id:
+            payload["client_order_id"] = client_order_id
+        return await self._post_order_payload(payload)
 
     async def get_order_status(self, broker_order_id: str) -> dict:
         headers = self._get_auth_headers()
@@ -135,7 +208,6 @@ class AlpacaAdapter(BrokerAdapter):
 
     def _map_alpaca_order_to_internal(self, alpaca_order: dict) -> dict:
         status_map = {
-            # Broker accepted / working states
             "new": OrderStatus.PLACED,
             "accepted": OrderStatus.PLACED,
             "pending_new": OrderStatus.PLACED,
@@ -147,12 +219,8 @@ class AlpacaAdapter(BrokerAdapter):
             "done_for_day": OrderStatus.PLACED,
             "pending_cancel": OrderStatus.PLACED,
             "pending_replace": OrderStatus.PLACED,
-
-            # Fill states
             "partially_filled": OrderStatus.PARTIALLY_FILLED,
             "filled": OrderStatus.EXECUTED,
-
-            # Terminal states
             "canceled": OrderStatus.CANCELLED,
             "expired": OrderStatus.FAILED,
             "rejected": OrderStatus.FAILED,
@@ -160,14 +228,8 @@ class AlpacaAdapter(BrokerAdapter):
 
         alpaca_status = str(alpaca_order.get("status") or "").strip().lower()
         broker_order_id = alpaca_order.get("id")
-
         internal_status = status_map.get(alpaca_status)
-
         if internal_status is None:
-            # สำคัญ:
-            # ถ้า Alpaca ส่ง broker order id กลับมา แปลว่า broker รับ order แล้ว
-            # ดังนั้นอย่าตีเป็น FAILED ทันที เพราะจะทำให้ report ภายในหลอกว่า order ล้มเหลว
-            # ทั้งที่ broker อาจสร้าง position/stop order สำเร็จแล้ว
             internal_status = OrderStatus.PLACED if broker_order_id else OrderStatus.FAILED
 
         update_data = {
@@ -179,13 +241,10 @@ class AlpacaAdapter(BrokerAdapter):
 
         if alpaca_order.get("filled_avg_price"):
             update_data["avg_execution_price"] = float(alpaca_order["filled_avg_price"])
-
         if alpaca_order.get("filled_at"):
             update_data["executed_at"] = alpaca_order["filled_at"]
-
         if alpaca_status in {"rejected", "expired"}:
             update_data["reason"] = f"Alpaca {alpaca_status}: {alpaca_order.get('failed_reason', 'Unknown reason')}"
-
         return update_data
 
     async def execute(self, trade_order: TradeOrder) -> Dict[str, Any]:

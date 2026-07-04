@@ -36,7 +36,6 @@ class SimulatorAdapter(BrokerAdapter):
         await update_callback(update)
 
         await asyncio.sleep(0.1)
-
         symbol = order.symbol.upper()
         if "FAIL" in symbol:
             await self._simulate_failure(order, update_callback)
@@ -88,7 +87,51 @@ class SimulatorAdapter(BrokerAdapter):
         return reference_price * (1 - slippage)
 
     async def cancel_order(self, broker_order_id: str) -> dict:
-        return {"status": OrderStatus.CANCELLED}
+        return {"status": OrderStatus.CANCELLED, "broker_order_id": broker_order_id}
+
+    async def submit_exit_bracket_order(
+        self,
+        *,
+        symbol: str,
+        qty: Any,
+        side: str,
+        stop_price: Any,
+        take_profit_price: Any,
+        client_order_id: str | None = None,
+    ) -> dict:
+        broker_order_id = f"sim-oco-{uuid.uuid4()}"
+        return {
+            "status": OrderStatus.PLACED,
+            "broker_order_id": broker_order_id,
+            "symbol": symbol.upper(),
+            "qty": str(qty),
+            "side": side,
+            "order_class": "oco",
+            "stop_loss": {"stop_price": stop_price},
+            "take_profit": {"limit_price": take_profit_price},
+            "client_order_id": client_order_id,
+        }
+
+    async def submit_protective_stop_order(
+        self,
+        *,
+        symbol: str,
+        qty: Any,
+        side: str,
+        stop_price: Any,
+        client_order_id: str | None = None,
+    ) -> dict:
+        broker_order_id = f"sim-stop-{uuid.uuid4()}"
+        return {
+            "status": OrderStatus.PLACED,
+            "broker_order_id": broker_order_id,
+            "symbol": symbol.upper(),
+            "qty": str(qty),
+            "side": side,
+            "type": "stop",
+            "stop_price": stop_price,
+            "client_order_id": client_order_id,
+        }
 
     async def get_order_status(self, broker_order_id: str) -> dict:
         return {
