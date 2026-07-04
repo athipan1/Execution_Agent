@@ -26,6 +26,12 @@ from app.models import (
 
     ErrorDetail,
 
+    EXECUTION_AGENT_TYPE,
+
+    EXECUTION_AGENT_VERSION,
+
+    EXECUTION_SERVICE_VERSION,
+
     ExecutionJob,
 
     ExecutionJobStatus,
@@ -37,6 +43,8 @@ from app.models import (
     OrderStatus,
 
     ReconciliationReport,
+
+    SCHEMA_VERSION,
 
     StandardAgentResponse,
 
@@ -62,7 +70,7 @@ app = FastAPI(
 
     description="A production-grade service for executing trading orders.",
 
-    version="1.3.1",
+    version=EXECUTION_SERVICE_VERSION,
 
 )
 
@@ -152,6 +160,7 @@ def get_broker_cleanup_service(
 
     return BrokerCleanupService(broker_adapter)
 
+
 def get_broker_state_reconciliation_service(
 
     broker_adapter: BrokerAdapter = Depends(get_broker_adapter),
@@ -160,11 +169,21 @@ def get_broker_state_reconciliation_service(
 
     return BrokerStateReconciliationService(broker_adapter)
 
+PUBLIC_PATHS = {
+    "/health",
+    "/health/broker",
+    "/health/alpaca",
+    "/ready",
+    "/version",
+    "/docs",
+    "/openapi.json",
+}
+
 @app.middleware("http")
 
 async def security_middleware(request: Request, call_next):
 
-    if request.url.path in ["/health", "/health/broker", "/health/alpaca", "/docs", "/openapi.json"]:
+    if request.url.path in PUBLIC_PATHS:
 
         return await call_next(request)
 
@@ -292,7 +311,7 @@ async def generic_exception_handler(request: Request, exc: Exception):
 
     )
 
-def wrap_success(data: Any, confidence_score: float = 1.0) -> StandardAgentResponse[Any]:
+def wrap_success(data: Any, confidence_score: float = 1.0, metadata: Optional[Dict[str, Any]] = None) -> StandardAgentResponse[Any]:
 
     return StandardAgentResponse(
 
@@ -300,8 +319,60 @@ def wrap_success(data: Any, confidence_score: float = 1.0) -> StandardAgentRespo
 
         data=data,
 
+        metadata=metadata or {},
+
         confidence_score=confidence_score,
 
+    )
+
+@app.get("/version", response_model=StandardAgentResponse[Dict[str, Any]])
+async def version_check():
+    return wrap_success(
+        {
+            "agent_type": EXECUTION_AGENT_TYPE,
+            "version": EXECUTION_AGENT_VERSION,
+            "service_version": EXECUTION_SERVICE_VERSION,
+            "schema_version": SCHEMA_VERSION,
+            "api_contract": "multi-agent-trading-api-contract",
+        },
+        metadata={
+            "required_operational_endpoints": ["/health", "/ready", "/version"],
+        },
+    )
+
+@app.get("/ready", response_model=StandardAgentResponse[Dict[str, Any]])
+async def readiness_check():
+    trading_mode = _trading_mode()
+    broker_mode = _broker_mode()
+    broker_mode_supported = broker_mode in {"SIMULATOR", "ALPACA"}
+    live_guard_ok = trading_mode != "LIVE" or (
+        settings.ALLOW_LIVE_TRADING and broker_mode == "ALPACA"
+    )
+    ready = broker_mode_supported and live_guard_ok
+
+    return StandardAgentResponse(
+        status="success" if ready else "error",
+        data={
+            "ready": ready,
+            "trading_mode": trading_mode,
+            "trading_enabled": settings.TRADING_ENABLED,
+            "allow_live_trading": settings.ALLOW_LIVE_TRADING,
+            "broker_mode": broker_mode,
+            "broker_mode_supported": broker_mode_supported,
+            "live_guard_ok": live_guard_ok,
+            "require_broker_preflight": settings.REQUIRE_BROKER_PREFLIGHT,
+            "fail_on_stale_open_orders": settings.FAIL_ON_STALE_OPEN_ORDERS,
+            "db_mode": settings.DB_MODE,
+            "db_agent_url_configured": bool(settings.DB_AGENT_URL),
+        },
+        metadata={
+            "contract_source": "execution-agent-runtime-contract",
+        },
+        error=None if ready else ErrorDetail(
+            code="EXECUTION_AGENT_NOT_READY",
+            message="Execution Agent readiness check failed",
+        ).model_dump(),
+        confidence_score=1.0 if ready else 0.0,
     )
 
 def _open_order_symbols(open_orders: List[Dict[str, Any]]) -> List[str]:
@@ -1061,135 +1132,3 @@ async def broker_reconcile(
         )
 
     )
-
-@app.post("/broker/reconcile-state", response_model=StandardAgentResponse[Dict[str, Any]])
-
-async def reconcile_broker_state(
-
-    account_id: Union[int, str] = 1,
-
-    push_to_database: bool = True,
-
-    reconciliation_service: BrokerStateReconciliationService = Depends(
-
-        get_broker_state_reconciliation_service
-
-    ),
-
-):
-
-    return wrap_success(
-
-        await _run_broker_state_reconcile(
-
-            account_id=account_id,
-
-            push_to_database=push_to_database,
-
-            reconciliation_service=reconciliation_service,
-
-        )
-
-    )
-
-@app.get("/health", response_model=StandardAgentResponse[HealthResponse])
-
-async def health_check():
-
-    """Lightweight liveness probe for Docker/Kubernetes healthchecks.
-
-    This endpoint intentionally does not instantiate broker adapters or call
-    external broker APIs. Readiness for broker connectivity is exposed through
-    /health/broker and /health/alpaca so a missing Alpaca key cannot make the
-    container look dead during simulator/e2e startup.
-    """
-
-    return wrap_success(
-
-        HealthResponse(
-
-            status="healthy",
-
-            broker_connected=False,
-
-            mode=_trading_mode(),
-
-        )
-
-    )
-
-@app.get("/health/broker", response_model=StandardAgentResponse[HealthResponse])
-
-async def broker_health_check(adapter: BrokerAdapter = Depends(get_broker_adapter)):
-
-    return wrap_success(
-
-        HealthResponse(
-
-            status="healthy",
-
-            broker_connected=await adapter.check_connection(),
-
-            mode=_trading_mode(),
-
-        )
-
-    )
-
-@app.get("/health/alpaca", response_model=StandardAgentResponse[Dict[str, Any]])
-
-async def alpaca_health():
-
-    adapter = AlpacaAdapter()
-
-    try:
-
-        account = await adapter.get_account()
-
-        return wrap_success(
-
-            {
-
-                "connected": True,
-
-                "broker": "ALPACA",
-
-                "paper": account.get("paper"),
-
-                "account_status": account.get("status"),
-
-                "trading_blocked": account.get("trading_blocked"),
-
-                "account_blocked": account.get("account_blocked"),
-
-            },
-
-            confidence_score=1.0,
-
-        )
-
-    except Exception as exc:
-
-        return StandardAgentResponse(
-
-            status="error",
-
-            data={
-
-                "connected": False,
-
-                "broker": "ALPACA",
-
-            },
-
-            error=ErrorDetail(
-
-                code="ALPACA_HEALTH_CHECK_FAILED",
-
-                message=str(exc),
-
-            ).model_dump(),
-
-            confidence_score=0.0,
-
-        )
