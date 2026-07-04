@@ -15,6 +15,43 @@ from app.models import StandardAgentResponse
 router = APIRouter()
 
 
+def _payload_ticket_id(payload: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not isinstance(payload, dict):
+        return None
+    ticket_id = payload.get("ticket_id")
+    if ticket_id in (None, ""):
+        return None
+    return str(ticket_id).strip() or None
+
+
+def _current_ticket_for_gate(
+    preview: Dict[str, Any],
+    payload: Optional[Dict[str, Any]],
+    *,
+    reward_risk_ratio: float,
+) -> Dict[str, Any]:
+    """Rebuild the latest broker-backed ticket without changing the reviewed id.
+
+    The normal approval ticket is created from every currently ready item. The
+    manual gate may approve only a subset of symbols, so rebuilding the ticket
+    with the gate payload would produce a different subset hash and incorrectly
+    fail the ticket_id check. Prefer the full current ticket; fall back to a
+    symbol-scoped rebuild only when the submitted ticket was originally scoped.
+    """
+    base_payload = {"reward_risk_ratio": reward_risk_ratio}
+    full_ticket = build_order_review_approval_ticket(preview, base_payload)
+    requested_ticket_id = _payload_ticket_id(payload)
+
+    if not requested_ticket_id or full_ticket.get("ticket_id") == requested_ticket_id:
+        return full_ticket
+
+    scoped_ticket = build_order_review_approval_ticket(preview, payload if isinstance(payload, dict) else None)
+    if scoped_ticket.get("ticket_id") == requested_ticket_id:
+        return scoped_ticket
+
+    return full_ticket
+
+
 @router.post("/broker/order-review/manual-review-gate", response_model=StandardAgentResponse[Dict[str, Any]])
 async def broker_order_review_manual_review_gate(
     payload: Optional[Dict[str, Any]] = None,
@@ -35,7 +72,7 @@ async def broker_order_review_manual_review_gate(
     account = await adapter.get_account()
     diagnostics = build_protection_diagnostics(positions, open_orders)
     preview = build_order_review_plan(diagnostics, reward_risk_ratio=reward_risk_ratio)
-    ticket = build_order_review_approval_ticket(preview, payload if isinstance(payload, dict) else None)
+    ticket = _current_ticket_for_gate(preview, payload, reward_risk_ratio=reward_risk_ratio)
     gate = build_manual_order_review_gate(
         payload=payload,
         ticket=ticket,
