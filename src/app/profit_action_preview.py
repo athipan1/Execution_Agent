@@ -2,10 +2,16 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, model_validator
 
+from app.adapters.base import BrokerAdapter
 from app.models import StandardAgentResponse
+from app.services.manual_order_review_gate import build_manual_order_review_gate
+from app.services.order_review_approval_ticket import build_order_review_approval_ticket
+from app.services.order_review_plan import build_order_review_plan
+from app.services.protection_diagnostics import build_protection_diagnostics
+from app.trade_plan_execution import _broker_mode, _trading_mode, get_broker_adapter
 
 ProfitAction = Literal["hold", "move_stop", "partial_exit", "exit_all"]
 PositionSide = Literal["long", "short"]
@@ -145,4 +151,38 @@ async def profit_action_preview(payload: ProfitActionPreviewRequest):
         status="success",
         data=result,
         confidence_score=1.0 if result["risk_approved"] else 0.0,
+    )
+
+
+@router.post("/broker/order-review/manual-review-gate", response_model=StandardAgentResponse[Dict[str, Any]])
+async def manual_order_review_gate(
+    payload: Optional[Dict[str, Any]] = None,
+    adapter: BrokerAdapter = Depends(get_broker_adapter),
+):
+    reward_risk_ratio = 2.0
+    if isinstance(payload, dict) and payload.get("reward_risk_ratio") is not None:
+        try:
+            reward_risk_ratio = float(payload["reward_risk_ratio"])
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="reward_risk_ratio must be a number")
+        if reward_risk_ratio <= 0:
+            raise HTTPException(status_code=422, detail="reward_risk_ratio must be greater than zero")
+
+    positions = await adapter.get_positions()
+    open_orders = await adapter.get_open_orders()
+    account = await adapter.get_account()
+    diagnostics = build_protection_diagnostics(positions, open_orders)
+    preview = build_order_review_plan(diagnostics, reward_risk_ratio=reward_risk_ratio)
+    ticket = build_order_review_approval_ticket(preview, payload if isinstance(payload, dict) else None)
+    gate = build_manual_order_review_gate(
+        payload=payload,
+        ticket=ticket,
+        account=account,
+        broker_mode=_broker_mode(),
+        trading_mode=_trading_mode(),
+    )
+    return StandardAgentResponse(
+        status="success",
+        data=gate,
+        confidence_score=1.0 if gate.get("approval_valid") else 0.7,
     )
