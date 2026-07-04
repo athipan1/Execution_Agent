@@ -325,6 +325,57 @@ def wrap_success(data: Any, confidence_score: float = 1.0, metadata: Optional[Di
 
     )
 
+@app.get("/health", response_model=StandardAgentResponse[HealthResponse])
+async def health_check():
+    """Lightweight liveness probe that does not instantiate broker adapters."""
+    return wrap_success(
+        HealthResponse(
+            status="healthy",
+            broker_connected=False,
+            mode=_broker_mode(),
+        )
+    )
+
+@app.get("/health/broker", response_model=StandardAgentResponse[HealthResponse])
+async def broker_health_check(adapter: BrokerAdapter = Depends(get_broker_adapter)):
+    connected = await adapter.check_connection()
+    return wrap_success(
+        HealthResponse(
+            status="healthy" if connected else "unhealthy",
+            broker_connected=connected,
+            mode=_broker_mode(),
+        )
+    )
+
+@app.get("/health/alpaca", response_model=StandardAgentResponse[Dict[str, Any]])
+async def alpaca_health_check():
+    adapter = AlpacaAdapter()
+    try:
+        account = await adapter.get_account()
+        return wrap_success(
+            {
+                "connected": True,
+                "broker": "ALPACA",
+                "paper": account.get("paper"),
+                "status": account.get("status"),
+                "trading_blocked": account.get("trading_blocked"),
+                "account_blocked": account.get("account_blocked"),
+            }
+        )
+    except Exception as exc:
+        return StandardAgentResponse(
+            status="error",
+            data={
+                "connected": False,
+                "broker": "ALPACA",
+            },
+            error=ErrorDetail(
+                code="ALPACA_HEALTH_CHECK_FAILED",
+                message=str(exc),
+            ).model_dump(),
+            confidence_score=0.0,
+        )
+
 @app.get("/version", response_model=StandardAgentResponse[Dict[str, Any]])
 async def version_check():
     return wrap_success(
