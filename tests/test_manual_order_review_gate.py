@@ -23,7 +23,12 @@ def test_manual_review_gate_validates_paper_request():
                     "symbol": "BKNG",
                     "position_qty": "47",
                     "current_stop_order_id": "order-1",
-                    "current_stop_order": {"symbol": "BKNG", "status": "new"},
+                    "current_stop_order": {
+                        "symbol": "BKNG",
+                        "side": "sell",
+                        "type": "stop",
+                        "status": "new",
+                    },
                     "stop_price": 168.19,
                     "take_profit_price": 217.30,
                 }
