@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from app.adapters.base import BrokerAdapter
 from app.models import StandardAgentResponse
+from app.services.approved_bracket_upgrade_executor import execute_approved_paper_bracket_upgrade
 from app.services.manual_order_review_gate import build_manual_order_review_gate
 from app.services.order_review_approval_ticket import build_order_review_approval_ticket
 from app.services.order_review_plan import build_order_review_plan
@@ -191,11 +192,7 @@ async def profit_action_preview(payload: ProfitActionPreviewRequest):
     )
 
 
-@router.post("/broker/order-review/manual-review-gate", response_model=StandardAgentResponse[Dict[str, Any]])
-async def manual_order_review_gate(
-    payload: Optional[Dict[str, Any]] = None,
-    adapter: BrokerAdapter = Depends(get_broker_adapter),
-):
+async def _latest_gate_from_payload(payload: Optional[Dict[str, Any]], adapter: BrokerAdapter) -> tuple[Dict[str, Any], Dict[str, Any]]:
     reward_risk_ratio = 2.0
     if isinstance(payload, dict) and payload.get("reward_risk_ratio") is not None:
         try:
@@ -218,8 +215,38 @@ async def manual_order_review_gate(
         broker_mode=_broker_mode(),
         trading_mode=_trading_mode(),
     )
+    return gate, account
+
+
+@router.post("/broker/order-review/manual-review-gate", response_model=StandardAgentResponse[Dict[str, Any]])
+async def manual_order_review_gate(
+    payload: Optional[Dict[str, Any]] = None,
+    adapter: BrokerAdapter = Depends(get_broker_adapter),
+):
+    gate, _account = await _latest_gate_from_payload(payload, adapter)
     return StandardAgentResponse(
         status="success",
         data=gate,
         confidence_score=1.0 if gate.get("approval_valid") else 0.7,
+    )
+
+
+@router.post("/broker/order-review/execute-approved-bracket-upgrade", response_model=StandardAgentResponse[Dict[str, Any]])
+async def execute_approved_bracket_upgrade(
+    payload: Optional[Dict[str, Any]] = None,
+    adapter: BrokerAdapter = Depends(get_broker_adapter),
+):
+    gate, account = await _latest_gate_from_payload(payload, adapter)
+    result = await execute_approved_paper_bracket_upgrade(
+        payload=payload,
+        gate=gate,
+        account=account,
+        adapter=adapter,
+        broker_mode=_broker_mode(),
+        trading_mode=_trading_mode(),
+    )
+    return StandardAgentResponse(
+        status="success" if result.get("status") in {"executed", "blocked"} else "error",
+        data=result,
+        confidence_score=1.0 if result.get("status") == "executed" else 0.7,
     )
