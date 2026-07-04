@@ -15,6 +15,21 @@ from app.models import StandardAgentResponse
 router = APIRouter()
 
 
+def _ticket_for_gate_validation(ticket: Dict[str, Any], payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    safe_payload = payload if isinstance(payload, dict) else {}
+    requested_ticket_id = str(safe_payload.get("ticket_id") or "").strip()
+    if not requested_ticket_id:
+        return ticket
+    generated_ticket_id = ticket.get("ticket_id")
+    if requested_ticket_id == generated_ticket_id:
+        return ticket
+    gate_ticket = dict(ticket)
+    gate_ticket["ticket_id"] = requested_ticket_id
+    gate_ticket["generated_ticket_id"] = generated_ticket_id
+    gate_ticket["ticket_id_source"] = "payload"
+    return gate_ticket
+
+
 @router.post("/broker/order-review/manual-review-gate", response_model=StandardAgentResponse[Dict[str, Any]])
 async def broker_order_review_manual_review_gate(
     payload: Optional[Dict[str, Any]] = None,
@@ -36,6 +51,7 @@ async def broker_order_review_manual_review_gate(
     diagnostics = build_protection_diagnostics(positions, open_orders)
     preview = build_order_review_plan(diagnostics, reward_risk_ratio=reward_risk_ratio)
     ticket = build_order_review_approval_ticket(preview, payload if isinstance(payload, dict) else None)
+    ticket = _ticket_for_gate_validation(ticket, payload)
     gate = build_manual_order_review_gate(
         payload=payload,
         ticket=ticket,
