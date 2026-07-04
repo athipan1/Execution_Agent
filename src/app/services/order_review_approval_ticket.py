@@ -17,19 +17,27 @@ def _symbol_set(payload: Dict[str, Any] | None) -> Set[str]:
     return {str(symbol).strip().upper() for symbol in raw_symbols if str(symbol or "").strip()}
 
 
+def _ticket_plan_material(plan: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "symbol": plan.get("symbol"),
+        "qty": plan.get("position_qty"),
+        "stop_price": plan.get("stop_price"),
+        "take_profit_price": plan.get("take_profit_price"),
+        "current_stop_order_id": (plan.get("current_stop_order") or {}).get("id"),
+    }
+
+
 def _ticket_id(plans: List[Dict[str, Any]], reward_risk_ratio: float) -> str:
+    # Broker reads do not guarantee a stable position/order ordering. The ticket
+    # identity must describe the reviewed broker facts, not the transient list
+    # order returned by Alpaca or diagnostics, otherwise the manual gate may
+    # reject a still-valid ticket after rebuilding the latest broker snapshot.
     material = {
         "reward_risk_ratio": reward_risk_ratio,
-        "plans": [
-            {
-                "symbol": plan.get("symbol"),
-                "qty": plan.get("position_qty"),
-                "stop_price": plan.get("stop_price"),
-                "take_profit_price": plan.get("take_profit_price"),
-                "current_stop_order_id": (plan.get("current_stop_order") or {}).get("id"),
-            }
-            for plan in plans
-        ],
+        "plans": sorted(
+            (_ticket_plan_material(plan) for plan in plans),
+            key=lambda row: (str(row.get("symbol") or ""), str(row.get("current_stop_order_id") or "")),
+        ),
     }
     digest = hashlib.sha256(json.dumps(material, sort_keys=True, default=str).encode("utf-8")).hexdigest()
     return f"order-review-{digest[:16]}"
