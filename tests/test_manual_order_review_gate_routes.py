@@ -100,3 +100,35 @@ def test_manual_review_gate_uses_scoped_ticket_when_submitted_ticket_was_scoped(
     assert ticket["ticket_id"] == scoped_ticket["ticket_id"]
     assert ticket["summary"]["ready_for_manual_approval_count"] == 1
     assert ticket["ready_for_manual_approval"][0]["symbol"] == "BKNG"
+
+
+def test_order_review_ticket_id_is_stable_when_preview_order_changes():
+    preview = {
+        "reward_risk_ratio": 2.0,
+        "plans": [
+            {
+                "symbol": "BKNG",
+                "position_qty": "47",
+                "preview_status": "ready_for_manual_review",
+                "current_stop_order": {"id": "order-bkng", "symbol": "BKNG", "status": "new", "type": "stop"},
+                "stop_price": 168.19,
+                "take_profit_price": 217.30,
+                "reward_risk_ratio": 2.0,
+            },
+            {
+                "symbol": "ACGL",
+                "position_qty": "82",
+                "preview_status": "ready_for_manual_review",
+                "current_stop_order": {"id": "order-acgl", "symbol": "ACGL", "status": "new", "type": "stop"},
+                "stop_price": 92.94,
+                "take_profit_price": 120.72,
+                "reward_risk_ratio": 2.0,
+            },
+        ],
+    }
+    reordered_preview = {**preview, "plans": list(reversed(preview["plans"]))}
+
+    ticket = build_order_review_approval_ticket(preview, {"reward_risk_ratio": 2.0})
+    reordered_ticket = build_order_review_approval_ticket(reordered_preview, {"reward_risk_ratio": 2.0})
+
+    assert reordered_ticket["ticket_id"] == ticket["ticket_id"]
