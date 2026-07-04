@@ -5,7 +5,6 @@ uvicorn[standard]
 pydantic
 pydantic-settings
 python-json-logger
-alpaca-trade-api
 httpx
 
 # Testing Dependencies
