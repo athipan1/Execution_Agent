@@ -33,6 +33,31 @@ class BrokerAdapter(ABC):
         result = await self.cancel_order(broker_order_id)
         return {**result, "broker_order_id": broker_order_id, "symbol": broker_order.get("symbol"), "side": broker_order.get("side"), "qty": broker_order.get("qty")}
 
+    async def submit_exit_bracket_order(
+        self,
+        *,
+        symbol: str,
+        qty: Any,
+        side: str,
+        stop_price: Any,
+        take_profit_price: Any,
+        client_order_id: str | None = None,
+    ) -> dict:
+        """Submits a paper exit TP/SL replacement order for an existing position."""
+        return {"status": "error", "message": "submit_exit_bracket_order is not implemented for this adapter"}
+
+    async def submit_protective_stop_order(
+        self,
+        *,
+        symbol: str,
+        qty: Any,
+        side: str,
+        stop_price: Any,
+        client_order_id: str | None = None,
+    ) -> dict:
+        """Submits a protective stop order, used as rollback if bracket replacement fails."""
+        return {"status": "error", "message": "submit_protective_stop_order is not implemented for this adapter"}
+
     @abstractmethod
     async def get_order_status(self, broker_order_id: str) -> dict:
         """Retrieves the current status of an order from the broker."""
