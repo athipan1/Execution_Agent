@@ -15,6 +15,7 @@ from app.adapters.base import BrokerAdapter
 from app.config import settings
 from app.logging import get_logger
 from app.services.broker_preflight import BrokerPreflightError, build_broker_preflight_snapshot, validate_broker_preflight
+from app.services.skill_telemetry import build_skill_trade_outcome_payload
 from typing import Dict, Any, Optional
 from datetime import datetime, timezone, timedelta
 
@@ -95,6 +96,8 @@ class ExecutionService:
             updates["guard_plan"] = order_request.guard_plan
         if order_request.protective_exit and not order.protective_exit:
             updates["protective_exit"] = order_request.protective_exit
+        if order_request.metadata and not order.metadata:
+            updates["metadata"] = order_request.metadata
         if not updates:
             return order
         try:
@@ -168,12 +171,31 @@ class ExecutionService:
             broker_fill_id=str(broker_fill_id) if broker_fill_id else None,
             broker_order_id=broker_order_id,
             filled_at=filled_at,
+            realized_pnl=updates.get("realized_pnl"),
             metadata={
                 "source": "execution_agent_reconciliation",
                 "cumulative_executed_quantity": updates.get("executed_quantity"),
                 "order_status": str(updates.get("status")),
+                "order_metadata": previous_order.metadata,
             },
         )
+
+    async def _record_skill_trade_outcome_from_fill(self, previous_order: Order, fill: FillPayload) -> None:
+        payload = build_skill_trade_outcome_payload(
+            order=previous_order,
+            fill=fill,
+            realized_pl=fill.realized_pnl,
+        )
+        if not payload:
+            return
+        try:
+            await self.db_client.record_skill_trade_outcome(payload)
+            logger.info("Recorded skill trade outcome in Database Agent.", extra={"order_id": previous_order.order_id, "skill_id": payload.get("skill_id"), "execution_log_id": payload.get("execution_log_id")})
+        except Exception as exc:
+            message = f"Failed to record skill trade outcome for order {previous_order.order_id}: {exc}"
+            if str(settings.TRADING_MODE or "PAPER").upper() == "LIVE":
+                raise RuntimeError(message) from exc
+            logger.warning(message)
 
     async def _record_fill_from_update(self, previous_order: Optional[Order], updates: Dict[str, Any]) -> None:
         if not previous_order:
@@ -185,6 +207,7 @@ class ExecutionService:
         try:
             await self.db_client.record_fill(previous_order.account_id, fill)
             logger.info("Recorded broker fill in Database Agent.", extra={"order_id": previous_order.order_id, "quantity": fill.quantity, "broker_fill_id": fill.broker_fill_id})
+            await self._record_skill_trade_outcome_from_fill(previous_order, fill)
         except Exception as exc:
             message = f"Failed to record broker fill for order {previous_order.order_id}: {exc}"
             if str(settings.TRADING_MODE or "PAPER").upper() == "LIVE":

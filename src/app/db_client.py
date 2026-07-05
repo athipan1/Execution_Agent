@@ -49,6 +49,8 @@ class DatabaseClient(ABC):
     async def update_execution_job(self, job_id: Union[int, str], updates: Dict[str, Any]) -> ExecutionJob: ...
     @abstractmethod
     async def record_fill(self, account_id: Union[int, str], fill: FillPayload) -> Dict[str, Any]: ...
+    @abstractmethod
+    async def record_skill_trade_outcome(self, payload: Dict[str, Any]) -> Dict[str, Any]: ...
 
 class HttpDatabaseClient(DatabaseClient):
     def __init__(self, base_url: str):
@@ -166,6 +168,12 @@ class HttpDatabaseClient(DatabaseClient):
             response.raise_for_status()
             return self._unwrap_standard_response(response.json()) or {}
 
+    async def record_skill_trade_outcome(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.post(f"{self.base_url}/skills/trade-outcomes", json=jsonable_encoder(payload), headers=self._headers())
+            response.raise_for_status()
+            return self._unwrap_standard_response(response.json()) or {}
+
 class InMemoryDatabaseClient(DatabaseClient):
     def __init__(self):
         self._orders_by_trade_id: Dict[Union[int, str], Order] = {}
@@ -174,6 +182,7 @@ class InMemoryDatabaseClient(DatabaseClient):
         self._jobs_by_id: Dict[Union[int, str], ExecutionJob] = {}
         self._jobs_by_order_id: Dict[int, ExecutionJob] = {}
         self._fills: List[Dict[str, Any]] = []
+        self._skill_trade_outcomes: List[Dict[str, Any]] = []
         self._id_seq = 1
         self._job_id_seq = 1
         self._lock = asyncio.Lock()
@@ -181,6 +190,10 @@ class InMemoryDatabaseClient(DatabaseClient):
     @property
     def fills(self) -> List[Dict[str, Any]]:
         return list(self._fills)
+
+    @property
+    def skill_trade_outcomes(self) -> List[Dict[str, Any]]:
+        return list(self._skill_trade_outcomes)
 
     def seed_risk_approval(self, approval: RiskApproval) -> None:
         self._risk_approvals_by_id[approval.approval_id] = approval
@@ -295,6 +308,12 @@ class InMemoryDatabaseClient(DatabaseClient):
             payload["account_id"] = account_id
             self._fills.append(payload)
             return dict(payload)
+
+    async def record_skill_trade_outcome(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        async with self._lock:
+            stored = jsonable_encoder(payload)
+            self._skill_trade_outcomes.append(stored)
+            return dict(stored)
 
 _db_client_instance = None
 
