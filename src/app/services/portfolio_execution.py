@@ -16,7 +16,8 @@ def _approved_quantity(approval: PortfolioRiskApproval) -> int:
     if value is None:
         value = approval.approved_quantity
     if value is None:
-        value = (_risk_response(approval) or {}).get("final_quantity") or (_risk_response(approval) or {}).get("approved_quantity")
+        risk_response = _risk_response(approval)
+        value = risk_response.get("final_quantity") or risk_response.get("approved_quantity")
     try:
         return int(math.floor(float(value or 0)))
     except (TypeError, ValueError):
@@ -37,6 +38,25 @@ def _guard_plan(approval: PortfolioRiskApproval) -> Dict[str, Any] | None:
 def _protective_exit(approval: PortfolioRiskApproval) -> Dict[str, Any] | None:
     risk_response = _risk_response(approval)
     return approval.protective_exit or risk_response.get("protective_exit")
+
+
+def _metadata(approval: PortfolioRiskApproval) -> Dict[str, Any]:
+    """Merge metadata from Risk response and approval.
+
+    Manager may attach Curator/skill telemetry either directly on the approval
+    or inside the nested risk response metadata. Keep both paths so portfolio
+    execution can preserve skill_id and skill_execution_log_id for later
+    Database_Agent /skills/trade-outcomes reporting.
+    """
+    risk_response = _risk_response(approval)
+    metadata: Dict[str, Any] = {}
+    risk_metadata = risk_response.get("metadata")
+    if isinstance(risk_metadata, dict):
+        metadata.update(risk_metadata)
+    approval_metadata = getattr(approval, "metadata", None)
+    if isinstance(approval_metadata, dict):
+        metadata.update(approval_metadata)
+    return metadata
 
 
 def _price_for_approval(request: PortfolioExecutionRequest, approval: PortfolioRiskApproval) -> float | None:
@@ -111,6 +131,7 @@ def build_order_requests_from_portfolio(request: PortfolioExecutionRequest) -> t
                 final_quantity=quantity,
                 guard_plan=guard_plan,
                 protective_exit=protective_exit,
+                metadata=_metadata(approval),
             )
             orders.append(order)
         except Exception as exc:
