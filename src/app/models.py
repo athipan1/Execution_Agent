@@ -1,7 +1,12 @@
-from pydantic import BaseModel, Field, ConfigDict, model_validator
+from pydantic import BaseModel, Field, ConfigDict, model_validator, field_validator
 from typing import Optional, Any, Generic, TypeVar, Union, Dict, List, Literal
 from enum import Enum
 from datetime import datetime, timezone
+
+EXECUTION_AGENT_TYPE = "execution-agent"
+EXECUTION_AGENT_VERSION = "1.0.0"
+EXECUTION_SERVICE_VERSION = "1.3.1"
+SCHEMA_VERSION = "1.0"
 
 class OrderSide(str, Enum):
     BUY = "buy"
@@ -240,12 +245,23 @@ T = TypeVar("T")
 
 class StandardAgentResponse(BaseModel, Generic[T]):
     status: str
-    agent_type: str = "execution-agent"
-    version: str = "1.0.0"
+    agent_type: str = EXECUTION_AGENT_TYPE
+    version: str = EXECUTION_AGENT_VERSION
+    schema_version: str = SCHEMA_VERSION
+    correlation_id: Optional[str] = None
     data: Optional[T] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
     error: Optional[dict] = None
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     confidence_score: Optional[float] = None
+
+    @field_validator("schema_version")
+    @classmethod
+    def schema_version_must_be_semantic(cls, value: str) -> str:
+        parts = value.split(".")
+        if not all(part.isdigit() for part in parts):
+            raise ValueError('Schema version must be in semantic format (e.g., "1.0")')
+        return value
 
 class Order(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -319,5 +335,5 @@ class ReconciliationReport(BaseModel):
     checked: int = 0
     updated: int = 0
     skipped: int = 0
-    errors: int = 0
+    failed: int = 0
     items: List[ReconciliationItem] = Field(default_factory=list)
