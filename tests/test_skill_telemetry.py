@@ -10,10 +10,13 @@ from app.models import (
     OrderSide,
     OrderStatus,
     OrderType,
+    PortfolioExecutionRequest,
+    PortfolioRiskApproval,
     TimeInForce,
     TradePlanExecutionRequest,
     TradePlanRiskEnvelope,
 )
+from app.services.portfolio_execution import build_order_requests_from_portfolio
 from app.services.skill_telemetry import build_skill_trade_outcome_payload, extract_skill_metadata
 
 
@@ -54,6 +57,57 @@ def test_trade_plan_to_order_request_carries_metadata():
 
     assert order_request.symbol == "ACGL"
     assert order_request.metadata["curator_signal"]["skill_id"] == "skill-1"
+
+
+def test_portfolio_execution_carries_approval_metadata():
+    request = PortfolioExecutionRequest(
+        account_id="1",
+        approvals=[
+            PortfolioRiskApproval(
+                symbol="acgl",
+                approved=True,
+                strategy_bucket="value_rebound",
+                risk_approval_id="risk-1",
+                final_quantity=10,
+                guard_plan={"stop_loss": 95.0},
+                metadata=curator_metadata(),
+            )
+        ],
+        default_price=100.0,
+    )
+
+    orders, failed = build_order_requests_from_portfolio(request)
+
+    assert failed == []
+    assert len(orders) == 1
+    assert orders[0].symbol == "ACGL"
+    assert orders[0].metadata["curator_signal"]["skill_id"] == "skill-1"
+
+
+def test_portfolio_execution_merges_risk_response_and_approval_metadata():
+    request = PortfolioExecutionRequest(
+        account_id="1",
+        approvals=[
+            PortfolioRiskApproval(
+                symbol="ACGL",
+                approved=True,
+                strategy_bucket="value_rebound",
+                risk_approval_id="risk-1",
+                final_quantity=10,
+                guard_plan={"stop_loss": 95.0},
+                risk_response={"metadata": {"source": "risk", "keep": True}},
+                metadata={"source": "approval", **curator_metadata()},
+            )
+        ],
+        default_price=100.0,
+    )
+
+    orders, failed = build_order_requests_from_portfolio(request)
+
+    assert failed == []
+    assert orders[0].metadata["source"] == "approval"
+    assert orders[0].metadata["keep"] is True
+    assert orders[0].metadata["curator_signal"]["skill_id"] == "skill-1"
 
 
 def test_extract_skill_metadata_from_curator_signal():
