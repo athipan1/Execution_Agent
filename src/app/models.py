@@ -59,6 +59,7 @@ class CreateOrderRequest(BaseModel):
     final_quantity: int = Field(gt=0)
     guard_plan: Optional[Dict[str, Any]] = None
     protective_exit: Optional[Dict[str, Any]] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_limit_price(self) -> "CreateOrderRequest":
@@ -158,6 +159,7 @@ class TradePlanExecutionRequest(BaseModel):
             final_quantity=self.final_quantity or self.quantity,
             guard_plan=guard_plan,
             protective_exit=protective_exit,
+            metadata=self.metadata,
         )
 
 class TradeOrder(BaseModel):
@@ -186,6 +188,7 @@ class PortfolioRiskApproval(BaseModel):
     protective_exit: Optional[Dict[str, Any]] = None
     execution: Optional[Dict[str, Any]] = None
     risk: Optional[Dict[str, Any]] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
 
 class PortfolioExecutionRequest(BaseModel):
     account_id: Union[int, str]
@@ -218,6 +221,7 @@ class OrderResponse(BaseModel):
     executed_at: Optional[datetime] = None
     guard_plan: Optional[Dict[str, Any]] = None
     protective_exit: Optional[Dict[str, Any]] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
 
 class CreateOrderResponse(OrderResponse):
     pass
@@ -283,6 +287,7 @@ class Order(BaseModel):
     executed_at: Optional[datetime] = None
     guard_plan: Optional[Dict[str, Any]] = None
     protective_exit: Optional[Dict[str, Any]] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
 
 class FillPayload(BaseModel):
     order_id: int
