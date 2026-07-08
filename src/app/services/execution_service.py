@@ -16,6 +16,11 @@ from app.config import settings
 from app.logging import get_logger
 from app.services.broker_preflight import BrokerPreflightError, build_broker_preflight_snapshot, validate_broker_preflight
 from app.services.skill_telemetry import build_skill_trade_outcome_payload
+from app.services.strategy_bucket_contract import (
+    StrategyBucketDiagnostics,
+    StrategyBucketPersistenceError,
+    assert_strategy_bucket_persisted,
+)
 from typing import Dict, Any, Optional
 from datetime import datetime, timezone, timedelta
 
@@ -90,6 +95,64 @@ class ExecutionService:
         self._validate_risk_approval(approval, order_request)
         return approval
 
+    async def _mark_strategy_bucket_mismatch_failed(
+        self,
+        order: Order,
+        diagnostics: StrategyBucketDiagnostics,
+    ) -> None:
+        reason = (
+            "strategy_bucket_persistence_mismatch: "
+            f"requested={diagnostics.requested_bucket}, "
+            f"persisted={diagnostics.persisted_bucket}, "
+            f"context={diagnostics.context}"
+        )
+        try:
+            await self.db_client.update_order(
+                order.order_id,
+                {
+                    "status": OrderStatus.FAILED,
+                    "reason": reason,
+                },
+            )
+        except Exception as exc:
+            logger.error(
+                "Failed to mark order failed after strategy bucket persistence mismatch.",
+                extra={
+                    "order_id": order.order_id,
+                    "trade_id": order.trade_id,
+                    "bucket_diagnostics": diagnostics.as_dict(),
+                    "error": str(exc),
+                },
+            )
+
+    async def _assert_strategy_bucket_persistence(
+        self,
+        order_request: CreateOrderRequest,
+        order: Order,
+        *,
+        context: str,
+        fail_created_order: bool,
+    ) -> StrategyBucketDiagnostics:
+        try:
+            diagnostics = assert_strategy_bucket_persisted(
+                order_request,
+                order,
+                context=context,
+            )
+        except StrategyBucketPersistenceError as exc:
+            logger.error(
+                "Database Agent returned a mismatched strategy bucket.",
+                extra={
+                    "order_id": order.order_id,
+                    "trade_id": order.trade_id,
+                    "bucket_diagnostics": exc.diagnostics.as_dict(),
+                },
+            )
+            if fail_created_order:
+                await self._mark_strategy_bucket_mismatch_failed(order, exc.diagnostics)
+            raise
+        return diagnostics
+
     async def _ensure_protection_metadata(self, order: Order, order_request: CreateOrderRequest) -> Order:
         updates: Dict[str, Any] = {}
         if order_request.guard_plan and not order.guard_plan:
@@ -112,13 +175,39 @@ class ExecutionService:
         self._validate_execution_risk_gate(order_request)
         existing_order = await self.db_client.get_order_by_trade_id(order_request.trade_id)
         if existing_order:
+            await self._assert_strategy_bucket_persistence(
+                order_request,
+                existing_order,
+                context="idempotent_lookup",
+                fail_created_order=False,
+            )
             logger.info("Idempotent request received for existing order.", extra={"trade_id": order_request.trade_id, "order_id": existing_order.order_id})
             return existing_order
         await self.verify_risk_approval(order_request)
         new_order = await self.db_client.create_order(order_request)
+        await self._assert_strategy_bucket_persistence(
+            order_request,
+            new_order,
+            context="create_response",
+            fail_created_order=True,
+        )
         new_order = await self._ensure_protection_metadata(new_order, order_request)
+        await self._assert_strategy_bucket_persistence(
+            order_request,
+            new_order,
+            context="metadata_update_response",
+            fail_created_order=True,
+        )
         await self.db_client.mark_risk_approval_used(order_request.risk_approval_id, new_order.order_id)
-        logger.info("New order created after risk approval verification.", extra={"trade_id": new_order.trade_id, "order_id": new_order.order_id, "risk_approval_id": order_request.risk_approval_id})
+        logger.info(
+            "New order created after risk approval and strategy bucket verification.",
+            extra={
+                "trade_id": new_order.trade_id,
+                "order_id": new_order.order_id,
+                "risk_approval_id": order_request.risk_approval_id,
+                "strategy_bucket": new_order.strategy_bucket,
+            },
+        )
         return new_order
 
     async def enqueue_order_execution(self, order: Order) -> ExecutionJob:
