@@ -44,14 +44,21 @@ def _reference_price(row: Dict[str, Any]) -> Optional[float]:
     )
 
 
-def _take_profit_for_long(reference_price: float, stop_price: float, reward_risk_ratio: float) -> Optional[float]:
+def _take_profit_for_long(
+    reference_price: float,
+    stop_price: float,
+    reward_risk_ratio: float,
+) -> Optional[float]:
     risk_per_share = reference_price - stop_price
     if risk_per_share <= 0:
         return None
     return _round_price(reference_price + (risk_per_share * reward_risk_ratio))
 
 
-def _build_stop_only_plan(row: Dict[str, Any], reward_risk_ratio: float) -> Dict[str, Any]:
+def _build_stop_only_plan(
+    row: Dict[str, Any],
+    reward_risk_ratio: float,
+) -> Dict[str, Any]:
     stop_order = _first_order(row, "protective_orders")
     stop_price = _order_stop_price(stop_order)
     reference = _reference_price(row)
@@ -71,7 +78,10 @@ def _build_stop_only_plan(row: Dict[str, Any], reward_risk_ratio: float) -> Dict
             **base,
             "preview_status": "blocked_missing_stop_price",
             "recommended_next_step": "fetch_full_broker_order_details_before_cancel_replace",
-            "reason": "Existing stop-only order does not expose stop_price/trigger_price in diagnostics payload.",
+            "reason": (
+                "Existing stop-only order does not expose "
+                "stop_price/trigger_price in diagnostics payload."
+            ),
             "proposed_actions": [],
         }
 
@@ -80,17 +90,26 @@ def _build_stop_only_plan(row: Dict[str, Any], reward_risk_ratio: float) -> Dict
             **base,
             "preview_status": "blocked_missing_reference_price",
             "recommended_next_step": "fetch_position_current_price_or_average_entry_price",
-            "reason": "Position does not expose current_price or avg_entry_price for take-profit calculation.",
+            "reason": (
+                "Position does not expose current_price or avg_entry_price "
+                "for take-profit calculation."
+            ),
             "proposed_actions": [],
         }
 
-    take_profit_price = _take_profit_for_long(reference, stop_price, reward_risk_ratio)
+    take_profit_price = _take_profit_for_long(
+        reference,
+        stop_price,
+        reward_risk_ratio,
+    )
     if take_profit_price is None:
         return {
             **base,
             "preview_status": "blocked_invalid_stop_direction",
             "recommended_next_step": "review_existing_stop_price",
-            "reason": "For long positions, stop_price must be below the reference price.",
+            "reason": (
+                "For long positions, stop_price must be below the reference price."
+            ),
             "reference_price": reference,
             "stop_price": stop_price,
             "proposed_actions": [],
@@ -123,16 +142,39 @@ def _build_stop_only_plan(row: Dict[str, Any], reward_risk_ratio: float) -> Dict
     }
 
 
+def _build_partial_protection_plan(row: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "symbol": row.get("symbol"),
+        "position_qty": row.get("position_qty"),
+        "current_status": row.get("protection_status"),
+        "current_action": row.get("recommended_action"),
+        "preview_status": "blocked_partial_protection",
+        "recommended_next_step": "reconcile_protective_order_quantities",
+        "reason": (
+            "Existing stop-loss and take-profit orders do not provide verified "
+            "full-quantity protection for the broker position."
+        ),
+        "stop_covered_qty": row.get("stop_covered_qty"),
+        "take_profit_covered_qty": row.get("take_profit_covered_qty"),
+        "unprotected_stop_qty": row.get("unprotected_stop_qty"),
+        "unprotected_take_profit_qty": row.get("unprotected_take_profit_qty"),
+        "orders_submitted": False,
+        "orders_cancelled": False,
+        "preview_only": True,
+        "proposed_actions": [],
+    }
+
+
 def build_order_review_plan(
     diagnostics: Dict[str, Any],
     *,
     reward_risk_ratio: float = DEFAULT_REWARD_RISK_RATIO,
 ) -> Dict[str, Any]:
-    """Build a read-only preview plan from broker protection diagnostics.
+    """Build a fail-closed, read-only plan from protection diagnostics.
 
-    This function never submits, cancels, or replaces broker orders. It only
-    describes what would be required before a future manual/approved execution
-    path can safely replace stop-only protection with TP/SL bracket protection.
+    This function never submits, cancels, or replaces broker orders. Only
+    verified fully protected positions are considered no-action. Stop-only,
+    partial, unprotected, and unknown states remain blocked or reviewable.
     """
     rows = diagnostics.get("positions") or []
     plans: List[Dict[str, Any]] = []
@@ -159,6 +201,9 @@ def build_order_review_plan(
             else:
                 summary["blocked_count"] += 1
             plans.append(plan)
+        elif status == "partially_protected":
+            summary["blocked_count"] += 1
+            plans.append(_build_partial_protection_plan(row))
         elif status == "unprotected":
             summary["blocked_count"] += 1
             plans.append(
@@ -167,7 +212,24 @@ def build_order_review_plan(
                     "position_qty": row.get("position_qty"),
                     "current_status": status,
                     "preview_status": "blocked_unprotected_position",
-                    "recommended_next_step": "create_protective_order_from_risk_agent_before_any_upgrade_flow",
+                    "recommended_next_step": (
+                        "create_protective_order_from_risk_agent_before_any_upgrade_flow"
+                    ),
+                    "orders_submitted": False,
+                    "orders_cancelled": False,
+                    "preview_only": True,
+                    "proposed_actions": [],
+                }
+            )
+        elif status in {"bracket_protected", "tp_sl_protected"}:
+            summary["no_action_count"] += 1
+            plans.append(
+                {
+                    "symbol": row.get("symbol"),
+                    "position_qty": row.get("position_qty"),
+                    "current_status": status,
+                    "preview_status": "no_action_required",
+                    "recommended_next_step": "none",
                     "orders_submitted": False,
                     "orders_cancelled": False,
                     "preview_only": True,
@@ -175,14 +237,17 @@ def build_order_review_plan(
                 }
             )
         else:
-            summary["no_action_count"] += 1
+            summary["blocked_count"] += 1
             plans.append(
                 {
                     "symbol": row.get("symbol"),
                     "position_qty": row.get("position_qty"),
                     "current_status": status or row.get("protection_status"),
-                    "preview_status": "no_action_required",
-                    "recommended_next_step": "none",
+                    "preview_status": "blocked_unknown_protection_status",
+                    "recommended_next_step": "investigate_protection_diagnostics_contract",
+                    "reason": (
+                        "Unknown or missing protection status cannot be treated as safe."
+                    ),
                     "orders_submitted": False,
                     "orders_cancelled": False,
                     "preview_only": True,

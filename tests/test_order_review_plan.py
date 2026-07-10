@@ -136,3 +136,53 @@ def test_order_review_plan_blocks_unprotected_positions():
     assert plan["preview_status"] == "blocked_unprotected_position"
     assert plan["recommended_next_step"] == "create_protective_order_from_risk_agent_before_any_upgrade_flow"
     assert plan["proposed_actions"] == []
+
+
+def test_order_review_plan_blocks_partial_protection_and_preserves_coverage():
+    diagnostics = {
+        "positions": [
+            {
+                "symbol": "ACGL",
+                "position_qty": "151",
+                "protection_status": "partially_protected",
+                "recommended_action": "reconcile_protective_order_quantities",
+                "stop_covered_qty": 0.0,
+                "take_profit_covered_qty": 54.0,
+                "unprotected_stop_qty": 151.0,
+                "unprotected_take_profit_qty": 97.0,
+            }
+        ]
+    }
+
+    preview = build_order_review_plan(diagnostics)
+
+    assert preview["summary"]["blocked_count"] == 1
+    assert preview["summary"]["no_action_count"] == 0
+    plan = preview["plans"][0]
+    assert plan["preview_status"] == "blocked_partial_protection"
+    assert plan["recommended_next_step"] == "reconcile_protective_order_quantities"
+    assert plan["stop_covered_qty"] == 0.0
+    assert plan["take_profit_covered_qty"] == 54.0
+    assert plan["unprotected_stop_qty"] == 151.0
+    assert plan["unprotected_take_profit_qty"] == 97.0
+    assert plan["proposed_actions"] == []
+
+
+def test_order_review_plan_fails_closed_on_unknown_status():
+    diagnostics = {
+        "positions": [
+            {
+                "symbol": "CINF",
+                "position_qty": "86",
+                "protection_status": "mystery_state",
+            }
+        ]
+    }
+
+    preview = build_order_review_plan(diagnostics)
+
+    assert preview["summary"]["blocked_count"] == 1
+    assert preview["summary"]["no_action_count"] == 0
+    plan = preview["plans"][0]
+    assert plan["preview_status"] == "blocked_unknown_protection_status"
+    assert plan["recommended_next_step"] == "investigate_protection_diagnostics_contract"
