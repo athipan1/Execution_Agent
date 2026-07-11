@@ -11,13 +11,22 @@ logger = get_logger(__name__)
 COMPOUND_ORDER_CLASSES = {"bracket", "oco", "oto"}
 PRICE_FIELDS = ("stop_price", "limit_price", "trail_price", "trail_percent")
 CANCEL_CONFIRMED_STATUSES = {"canceled", "cancelled"}
-CANCEL_CONFIRMATION_ATTEMPTS = 30
-CANCEL_CONFIRMATION_INTERVAL_SECONDS = 0.5
+CANCEL_PENDING_MARKERS = ("order pending cancel", "42210000")
+CANCEL_CONFIRMATION_ATTEMPTS = 60
+CANCEL_CONFIRMATION_INTERVAL_SECONDS = 1.0
 
 
 def _status_text(value: Any) -> str:
     raw = getattr(value, "value", value)
     return str(raw or "").strip().lower()
+
+
+def _is_pending_cancel_response(result: Dict[str, Any]) -> bool:
+    text = " ".join(
+        str(result.get(key) or "")
+        for key in ("message", "reason", "body", "error")
+    ).lower()
+    return any(marker in text for marker in CANCEL_PENDING_MARKERS)
 
 
 class HydratedAlpacaAdapter(AlpacaAdapter):
@@ -31,9 +40,10 @@ class HydratedAlpacaAdapter(AlpacaAdapter):
     with ``nested=true`` before diagnostics consume them.
 
     Alpaca can also acknowledge DELETE with HTTP 204 while the order remains in
-    ``pending_cancel`` and continues reserving position quantity. Protection
-    reconciliation must not submit a full-position replacement until the broker
-    confirms the old order is actually canceled.
+    ``pending_cancel`` and continues reserving position quantity. Repeating the
+    DELETE can then return HTTP 422 ``order pending cancel``. Both responses mean
+    cancellation is in flight, so protection reconciliation waits for the broker
+    to confirm ``canceled`` before submitting a full-position replacement.
     """
 
     async def get_broker_order(self, broker_order_id: str) -> Dict[str, Any]:
@@ -44,7 +54,9 @@ class HydratedAlpacaAdapter(AlpacaAdapter):
 
     async def cancel_order(self, broker_order_id: str) -> dict:
         result = await super().cancel_order(broker_order_id)
-        if _status_text(result.get("status")) not in CANCEL_CONFIRMED_STATUSES:
+        initial_status = _status_text(result.get("status"))
+        already_pending = _is_pending_cancel_response(result)
+        if initial_status not in CANCEL_CONFIRMED_STATUSES and not already_pending:
             return result
 
         observations: List[Dict[str, Any]] = []
@@ -62,8 +74,14 @@ class HydratedAlpacaAdapter(AlpacaAdapter):
                 if last_broker_status in CANCEL_CONFIRMED_STATUSES:
                     return {
                         **result,
+                        "status": (
+                            result.get("status")
+                            if initial_status in CANCEL_CONFIRMED_STATUSES
+                            else "cancelled"
+                        ),
                         "cancel_requested": True,
                         "cancel_confirmed": True,
+                        "cancel_was_already_pending": already_pending,
                         "broker_status": last_broker_status,
                         "confirmation_attempts": attempt,
                     }
@@ -79,23 +97,25 @@ class HydratedAlpacaAdapter(AlpacaAdapter):
                 await asyncio.sleep(CANCEL_CONFIRMATION_INTERVAL_SECONDS)
 
         logger.error(
-            "Alpaca accepted cancellation but did not confirm terminal status before timeout.",
+            "Alpaca cancellation remained pending beyond the confirmation timeout.",
             extra={
                 "broker_order_id": broker_order_id,
                 "last_broker_status": last_broker_status,
+                "cancel_was_already_pending": already_pending,
                 "confirmation_attempts": CANCEL_CONFIRMATION_ATTEMPTS,
             },
         )
         return {
             "status": "error",
             "message": (
-                "Alpaca accepted the cancellation request, but the order remained "
-                "active or pending_cancel until the confirmation timeout. Replacement "
-                "submission was blocked to avoid an insufficient-quantity race."
+                "Alpaca cancellation remained active or pending_cancel until the "
+                "confirmation timeout. Replacement submission was blocked to avoid "
+                "an insufficient-quantity race."
             ),
             "broker_order_id": broker_order_id,
             "cancel_requested": True,
             "cancel_confirmed": False,
+            "cancel_was_already_pending": already_pending,
             "last_broker_status": last_broker_status or None,
             "confirmation_attempts": CANCEL_CONFIRMATION_ATTEMPTS,
             "recent_observations": observations[-5:],
