@@ -14,7 +14,11 @@ def _symbol_set(payload: Dict[str, Any] | None) -> Set[str]:
         raw_symbols = [raw_symbols]
     if not isinstance(raw_symbols, list):
         return set()
-    return {str(symbol).strip().upper() for symbol in raw_symbols if str(symbol or "").strip()}
+    return {
+        str(symbol).strip().upper()
+        for symbol in raw_symbols
+        if str(symbol or "").strip()
+    }
 
 
 def _ticket_plan_material(plan: Dict[str, Any]) -> Dict[str, Any]:
@@ -36,11 +40,34 @@ def _ticket_id(plans: List[Dict[str, Any]], reward_risk_ratio: float) -> str:
         "reward_risk_ratio": reward_risk_ratio,
         "plans": sorted(
             (_ticket_plan_material(plan) for plan in plans),
-            key=lambda row: (str(row.get("symbol") or ""), str(row.get("current_stop_order_id") or "")),
+            key=lambda row: (
+                str(row.get("symbol") or ""),
+                str(row.get("current_stop_order_id") or ""),
+            ),
         ),
     }
-    digest = hashlib.sha256(json.dumps(material, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+    digest = hashlib.sha256(
+        json.dumps(material, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()
     return f"order-review-{digest[:16]}"
+
+
+def _non_action_plan(plan: Dict[str, Any], symbol: str) -> Dict[str, Any]:
+    return {
+        "symbol": symbol,
+        "preview_status": "no_action_required",
+        "reason": plan.get("reason"),
+        "recommended_next_step": plan.get("recommended_next_step"),
+    }
+
+
+def _blocked_plan(plan: Dict[str, Any], symbol: str) -> Dict[str, Any]:
+    return {
+        "symbol": symbol,
+        "preview_status": plan.get("preview_status"),
+        "reason": plan.get("reason"),
+        "recommended_next_step": plan.get("recommended_next_step"),
+    }
 
 
 def build_order_review_approval_ticket(
@@ -57,6 +84,7 @@ def build_order_review_approval_ticket(
     requested_symbols = _symbol_set(payload)
     plans = preview.get("plans") or []
     ready: List[Dict[str, Any]] = []
+    no_action: List[Dict[str, Any]] = []
     blocked: List[Dict[str, Any]] = []
 
     for plan in plans:
@@ -65,12 +93,16 @@ def build_order_review_approval_ticket(
         symbol = str(plan.get("symbol") or "").upper()
         if requested_symbols and symbol not in requested_symbols:
             continue
-        if plan.get("preview_status") == "ready_for_manual_review":
+
+        preview_status = plan.get("preview_status")
+        if preview_status == "ready_for_manual_review":
             ready.append(
                 {
                     "symbol": symbol,
                     "position_qty": plan.get("position_qty"),
-                    "current_stop_order_id": (plan.get("current_stop_order") or {}).get("id"),
+                    "current_stop_order_id": (
+                        plan.get("current_stop_order") or {}
+                    ).get("id"),
                     "current_stop_order": plan.get("current_stop_order"),
                     "reference_price": plan.get("reference_price"),
                     "stop_price": plan.get("stop_price"),
@@ -80,45 +112,54 @@ def build_order_review_approval_ticket(
                     "approval_status": "manual_approval_required",
                 }
             )
+        elif preview_status == "no_action_required":
+            no_action.append(_non_action_plan(plan, symbol))
         else:
-            blocked.append(
-                {
-                    "symbol": symbol,
-                    "preview_status": plan.get("preview_status"),
-                    "reason": plan.get("reason"),
-                    "recommended_next_step": plan.get("recommended_next_step"),
-                }
-            )
+            blocked.append(_blocked_plan(plan, symbol))
 
     ticket = {
-        "ticket_id": _ticket_id(ready, float(preview.get("reward_risk_ratio") or 2.0)),
+        "ticket_id": _ticket_id(
+            ready,
+            float(preview.get("reward_risk_ratio") or 2.0),
+        ),
         "created_at": datetime.now(timezone.utc).isoformat(),
         "mode": "manual_approval_ticket",
         "safety": "read_only_no_orders_submitted_no_orders_cancelled",
-        "approval_required": True,
+        "approval_required": bool(ready),
         "execution_enabled": False,
         "manual_confirmation_phrase": "APPROVE_ORDER_REVIEW_TICKET",
         "requested_symbols": sorted(requested_symbols),
         "summary": {
             "requested_symbol_count": len(requested_symbols),
             "ready_for_manual_approval_count": len(ready),
+            "no_action_required_count": len(no_action),
             "blocked_count": len(blocked),
             "orders_submitted": False,
             "orders_cancelled": False,
         },
         "ready_for_manual_approval": ready,
+        "no_action_required": no_action,
         "blocked": blocked,
-        "next_step": "review_ticket_then_use_a_separate_approved_execution_workflow",
+        "next_step": (
+            "review_ticket_then_use_a_separate_approved_execution_workflow"
+            if ready
+            else "no_manual_approval_required"
+        ),
     }
 
-    if requested_symbols and not ready and not blocked:
+    if requested_symbols and not ready and not no_action and not blocked:
         ticket["summary"]["blocked_count"] = len(requested_symbols)
         ticket["blocked"] = [
             {
                 "symbol": symbol,
                 "preview_status": "blocked_symbol_not_found_in_preview",
-                "reason": "Requested symbol was not present in the latest order review preview.",
-                "recommended_next_step": "refresh_preview_or_verify_current_broker_positions",
+                "reason": (
+                    "Requested symbol was not present in the latest order "
+                    "review preview."
+                ),
+                "recommended_next_step": (
+                    "refresh_preview_or_verify_current_broker_positions"
+                ),
             }
             for symbol in sorted(requested_symbols)
         ]
