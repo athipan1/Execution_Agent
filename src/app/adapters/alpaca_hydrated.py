@@ -15,11 +15,11 @@ class HydratedAlpacaAdapter(AlpacaAdapter):
     """Alpaca adapter that always hydrates missing compound-order legs.
 
     Alpaca's open-order list can return a bracket/OCO parent with a take-profit
-    price while leaving ``legs`` null. The base adapter previously considered
-    that row complete because one price field existed. Protection diagnostics
-    then saw only the parent limit order and incorrectly classified the position
-    as partially protected. This adapter refreshes compound parents with
-    ``nested=true`` before diagnostics consume them.
+    price while leaving ``legs`` null or empty. The base adapter previously
+    considered that row complete because one price field existed. Protection
+    diagnostics then saw only the parent limit order and incorrectly classified
+    the position as partially protected. This adapter refreshes compound parents
+    with ``nested=true`` before diagnostics consume them.
     """
 
     async def get_broker_order(self, broker_order_id: str) -> Dict[str, Any]:
@@ -38,7 +38,7 @@ class HydratedAlpacaAdapter(AlpacaAdapter):
         order_class = str(item.get("order_class") or "").strip().lower()
         missing_compound_legs = (
             order_class in COMPOUND_ORDER_CLASSES
-            and not isinstance(item.get("legs"), list)
+            and not item.get("legs")
         )
         return not has_any_price or missing_compound_legs
 
