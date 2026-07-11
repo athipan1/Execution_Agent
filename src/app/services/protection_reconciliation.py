@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 
-SUPPORTED_STATUSES = {"partially_protected", "unprotected"}
+SUPPORTED_STATUSES = {"partially_protected", "unprotected", "stop_only"}
 
 
 def _float(value: Any) -> Optional[float]:
