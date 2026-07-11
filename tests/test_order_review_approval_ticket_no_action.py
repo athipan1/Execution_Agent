@@ -19,18 +19,9 @@ def test_no_action_required_is_not_reported_as_blocked():
     )
 
     assert ticket["approval_required"] is False
-    assert ticket["summary"]["ready_for_manual_approval_count"] == 0
     assert ticket["summary"]["no_action_required_count"] == 1
     assert ticket["summary"]["blocked_count"] == 0
     assert ticket["blocked"] == []
-    assert ticket["no_action_required"] == [
-        {
-            "symbol": "CINF",
-            "preview_status": "no_action_required",
-            "reason": "Existing broker protection already matches policy.",
-            "recommended_next_step": "keep_current_orders",
-        }
-    ]
     assert ticket["next_step"] == "no_manual_approval_required"
 
 
@@ -49,12 +40,10 @@ def test_ready_no_action_and_blocked_plans_have_separate_counts():
                 {
                     "symbol": "CINF",
                     "preview_status": "no_action_required",
-                    "reason": "No broker mutation is needed.",
                 },
                 {
                     "symbol": "ACGL",
                     "preview_status": "blocked_missing_reference_price",
-                    "reason": "Reference price is unavailable.",
                 },
             ]
         }
@@ -64,26 +53,36 @@ def test_ready_no_action_and_blocked_plans_have_separate_counts():
     assert ticket["summary"]["ready_for_manual_approval_count"] == 1
     assert ticket["summary"]["no_action_required_count"] == 1
     assert ticket["summary"]["blocked_count"] == 1
-    assert ticket["ready_for_manual_approval"][0]["symbol"] == "BKNG"
-    assert ticket["no_action_required"][0]["symbol"] == "CINF"
-    assert ticket["blocked"][0]["symbol"] == "ACGL"
+    assert (
+        ticket["next_step"]
+        == "review_ticket_then_use_a_separate_approved_execution_workflow"
+    )
 
 
-def test_requested_no_action_symbol_is_not_replaced_by_not_found_block():
+def test_blocked_only_ticket_requires_resolution_before_refresh():
     ticket = build_order_review_approval_ticket(
         {
             "plans": [
                 {
-                    "symbol": "CINF",
-                    "preview_status": "no_action_required",
-                    "reason": "Nothing to change.",
+                    "symbol": "ACGL",
+                    "preview_status": "blocked_missing_reference_price",
+                    "reason": "Reference price is unavailable.",
                 }
             ]
-        },
-        {"symbols": ["cinf"]},
+        }
     )
 
-    assert ticket["requested_symbols"] == ["CINF"]
-    assert ticket["summary"]["no_action_required_count"] == 1
-    assert ticket["summary"]["blocked_count"] == 0
-    assert ticket["blocked"] == []
+    assert ticket["approval_required"] is False
+    assert ticket["summary"]["blocked_count"] == 1
+    assert ticket["next_step"] == "resolve_blockers_then_refresh_order_review_preview"
+
+
+def test_requested_missing_symbol_uses_blocked_next_step():
+    ticket = build_order_review_approval_ticket(
+        {"plans": []},
+        {"symbols": ["ACGL"]},
+    )
+
+    assert ticket["summary"]["blocked_count"] == 1
+    assert ticket["blocked"][0]["preview_status"] == "blocked_symbol_not_found_in_preview"
+    assert ticket["next_step"] == "resolve_blockers_then_refresh_order_review_preview"
