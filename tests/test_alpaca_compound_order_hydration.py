@@ -5,7 +5,11 @@ from app.services.protection_diagnostics import build_protection_diagnostics
 
 
 @pytest.mark.asyncio
-async def test_compound_parent_with_price_but_missing_legs_is_hydrated(monkeypatch):
+@pytest.mark.parametrize("missing_legs", [None, []])
+async def test_compound_parent_with_price_but_missing_legs_is_hydrated(
+    monkeypatch,
+    missing_legs,
+):
     monkeypatch.setattr(
         "app.adapters.alpaca.settings.ALPACA_API_URL",
         "https://paper-api.alpaca.markets",
@@ -29,7 +33,7 @@ async def test_compound_parent_with_price_but_missing_legs_is_hydrated(monkeypat
                     "order_class": "bracket",
                     "status": "new",
                     "limit_price": "112.84",
-                    "legs": None,
+                    "legs": missing_legs,
                 }
             ]
         if path == "/v2/orders/parent-1?nested=true":
