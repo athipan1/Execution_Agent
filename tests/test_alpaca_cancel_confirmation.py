@@ -46,8 +46,51 @@ async def test_cancel_waits_until_pending_cancel_becomes_canceled(monkeypatch):
     assert result["status"] == OrderStatus.CANCELLED
     assert result["cancel_requested"] is True
     assert result["cancel_confirmed"] is True
+    assert result["cancel_was_already_pending"] is False
     assert result["broker_status"] == "canceled"
     assert result["confirmation_attempts"] == 3
+
+    await adapter._client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_existing_pending_cancel_response_resumes_status_polling(monkeypatch):
+    adapter = configure_adapter(monkeypatch)
+    monkeypatch.setattr(
+        "app.adapters.alpaca_hydrated.CANCEL_CONFIRMATION_INTERVAL_SECONDS",
+        0,
+    )
+
+    async def fake_base_cancel(self, broker_order_id):
+        return {
+            "status": "error",
+            "broker_order_id": broker_order_id,
+            "message": (
+                'Alpaca API error: {"code":42210000,'
+                '"message":"order pending cancel"}'
+            ),
+        }
+
+    statuses = iter(["pending_cancel", "canceled"])
+    observed = []
+
+    async def fake_get_broker_order(broker_order_id):
+        status = next(statuses)
+        observed.append(status)
+        return {"id": broker_order_id, "status": status}
+
+    monkeypatch.setattr(AlpacaAdapter, "cancel_order", fake_base_cancel)
+    monkeypatch.setattr(adapter, "get_broker_order", fake_get_broker_order)
+
+    result = await adapter.cancel_order("old-tp-54")
+
+    assert observed == ["pending_cancel", "canceled"]
+    assert result["status"] == "cancelled"
+    assert result["cancel_requested"] is True
+    assert result["cancel_confirmed"] is True
+    assert result["cancel_was_already_pending"] is True
+    assert result["broker_status"] == "canceled"
+    assert result["confirmation_attempts"] == 2
 
     await adapter._client.aclose()
 
@@ -81,6 +124,7 @@ async def test_cancel_confirmation_timeout_blocks_replacement_race(monkeypatch):
     assert result["status"] == "error"
     assert result["cancel_requested"] is True
     assert result["cancel_confirmed"] is False
+    assert result["cancel_was_already_pending"] is False
     assert result["last_broker_status"] == "pending_cancel"
     assert result["confirmation_attempts"] == 3
     assert "insufficient-quantity race" in result["message"]
