@@ -77,6 +77,20 @@ def _next_step(
     return "no_manual_approval_required"
 
 
+def _ticket_status(
+    ready: List[Dict[str, Any]],
+    no_action: List[Dict[str, Any]],
+    blocked: List[Dict[str, Any]],
+) -> str:
+    if blocked:
+        return "blocked"
+    if ready:
+        return "ready_for_manual_approval"
+    if no_action:
+        return "no_action_required"
+    return "empty"
+
+
 def build_order_review_approval_ticket(
     preview: Dict[str, Any],
     payload: Dict[str, Any] | None = None,
@@ -134,6 +148,12 @@ def build_order_review_approval_ticket(
             for symbol in sorted(requested_symbols)
         ]
 
+    ticket_status = _ticket_status(ready, no_action, blocked)
+    requires_operator_attention = ticket_status in {
+        "blocked",
+        "ready_for_manual_approval",
+    }
+
     return {
         "ticket_id": _ticket_id(
             ready,
@@ -142,6 +162,8 @@ def build_order_review_approval_ticket(
         "created_at": datetime.now(timezone.utc).isoformat(),
         "mode": "manual_approval_ticket",
         "safety": "read_only_no_orders_submitted_no_orders_cancelled",
+        "ticket_status": ticket_status,
+        "requires_operator_attention": requires_operator_attention,
         "approval_required": bool(ready),
         "execution_enabled": False,
         "manual_confirmation_phrase": "APPROVE_ORDER_REVIEW_TICKET",
@@ -151,6 +173,7 @@ def build_order_review_approval_ticket(
             "ready_for_manual_approval_count": len(ready),
             "no_action_required_count": len(no_action),
             "blocked_count": len(blocked),
+            "requires_operator_attention": requires_operator_attention,
             "orders_submitted": False,
             "orders_cancelled": False,
         },
