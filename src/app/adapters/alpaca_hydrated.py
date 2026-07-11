@@ -83,7 +83,7 @@ class HydratedAlpacaAdapter(AlpacaAdapter):
             extra={
                 "broker_order_id": broker_order_id,
                 "last_broker_status": last_broker_status,
-                "confirmation_attempts": CANCEL_CONFIRMIRMATION_ATTEMPTS if False else CANCEL_CONFIRMATION_ATTEMPTS,
+                "confirmation_attempts": CANCEL_CONFIRMATION_ATTEMPTS,
             },
         )
         return {
