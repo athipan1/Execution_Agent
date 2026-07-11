@@ -8,10 +8,15 @@ from pydantic import BaseModel, Field, model_validator
 from app.adapters.base import BrokerAdapter
 from app.models import StandardAgentResponse
 from app.services.approved_bracket_upgrade_executor import execute_approved_paper_bracket_upgrade
+from app.services.approved_protection_reconciliation_executor import (
+    build_protection_reconciliation_ticket,
+    execute_approved_paper_protection_reconciliation,
+)
 from app.services.manual_order_review_gate import build_manual_order_review_gate
 from app.services.order_review_approval_ticket import build_order_review_approval_ticket
 from app.services.order_review_plan import build_order_review_plan
 from app.services.protection_diagnostics import build_protection_diagnostics
+from app.services.protection_reconciliation import build_protection_reconciliation_preview
 from app.trade_plan_execution import _broker_mode, _trading_mode, get_broker_adapter
 
 ProfitAction = Literal["hold", "move_stop", "partial_exit", "exit_all"]
@@ -79,14 +84,7 @@ def _current_ticket_for_gate(
     *,
     reward_risk_ratio: float,
 ) -> Dict[str, Any]:
-    """Rebuild the latest broker-backed ticket without changing its scope.
-
-    The manual gate may approve only a subset of symbols from a full approval
-    ticket. Rebuilding the current ticket with the subset payload changes the
-    ticket hash and incorrectly blocks an otherwise valid request. Prefer the
-    full current ticket; fall back to a symbol-scoped ticket only when the
-    submitted ticket id was originally scoped.
-    """
+    """Rebuild the latest broker-backed ticket without changing its scope."""
     base_payload = {"reward_risk_ratio": reward_risk_ratio}
     full_ticket = build_order_review_approval_ticket(preview, base_payload)
     requested_ticket_id = _payload_ticket_id(payload)
@@ -94,7 +92,9 @@ def _current_ticket_for_gate(
     if not requested_ticket_id or full_ticket.get("ticket_id") == requested_ticket_id:
         return full_ticket
 
-    scoped_ticket = build_order_review_approval_ticket(preview, payload if isinstance(payload, dict) else None)
+    scoped_ticket = build_order_review_approval_ticket(
+        preview, payload if isinstance(payload, dict) else None
+    )
     if scoped_ticket.get("ticket_id") == requested_ticket_id:
         return scoped_ticket
 
@@ -110,7 +110,8 @@ def _preview_for_approved_action(payload: ProfitActionPreviewRequest) -> Dict[st
             "symbol": symbol,
             "quantity": 0,
             "order_preview": None,
-            "reason": payload.action.reason or "Risk-approved hold action; no execution required.",
+            "reason": payload.action.reason
+            or "Risk-approved hold action; no execution required.",
         }
     if action == "move_stop":
         return {
@@ -151,7 +152,8 @@ def _preview_for_approved_action(payload: ProfitActionPreviewRequest) -> Dict[st
             "time_in_force": "GTC",
             "reduce_only_intent": True,
         },
-        "reason": payload.action.reason or "Exit-all preview only; manual approval remains required.",
+        "reason": payload.action.reason
+        or "Exit-all preview only; manual approval remains required.",
     }
 
 
@@ -182,7 +184,10 @@ def build_profit_action_preview(payload: ProfitActionPreviewRequest) -> Dict[str
     }
 
 
-@router.post("/execution/profit-action-preview", response_model=StandardAgentResponse[Dict[str, Any]])
+@router.post(
+    "/execution/profit-action-preview",
+    response_model=StandardAgentResponse[Dict[str, Any]],
+)
 async def profit_action_preview(payload: ProfitActionPreviewRequest):
     result = build_profit_action_preview(payload)
     return StandardAgentResponse(
@@ -192,22 +197,33 @@ async def profit_action_preview(payload: ProfitActionPreviewRequest):
     )
 
 
-async def _latest_gate_from_payload(payload: Optional[Dict[str, Any]], adapter: BrokerAdapter) -> tuple[Dict[str, Any], Dict[str, Any]]:
+async def _latest_gate_from_payload(
+    payload: Optional[Dict[str, Any]], adapter: BrokerAdapter
+) -> tuple[Dict[str, Any], Dict[str, Any]]:
     reward_risk_ratio = 2.0
     if isinstance(payload, dict) and payload.get("reward_risk_ratio") is not None:
         try:
             reward_risk_ratio = float(payload["reward_risk_ratio"])
         except (TypeError, ValueError):
-            raise HTTPException(status_code=422, detail="reward_risk_ratio must be a number")
+            raise HTTPException(
+                status_code=422, detail="reward_risk_ratio must be a number"
+            )
         if reward_risk_ratio <= 0:
-            raise HTTPException(status_code=422, detail="reward_risk_ratio must be greater than zero")
+            raise HTTPException(
+                status_code=422,
+                detail="reward_risk_ratio must be greater than zero",
+            )
 
     positions = await adapter.get_positions()
     open_orders = await adapter.get_open_orders()
     account = await adapter.get_account()
     diagnostics = build_protection_diagnostics(positions, open_orders)
-    preview = build_order_review_plan(diagnostics, reward_risk_ratio=reward_risk_ratio)
-    ticket = _current_ticket_for_gate(preview, payload, reward_risk_ratio=reward_risk_ratio)
+    preview = build_order_review_plan(
+        diagnostics, reward_risk_ratio=reward_risk_ratio
+    )
+    ticket = _current_ticket_for_gate(
+        preview, payload, reward_risk_ratio=reward_risk_ratio
+    )
     gate = build_manual_order_review_gate(
         payload=payload,
         ticket=ticket,
@@ -218,7 +234,28 @@ async def _latest_gate_from_payload(payload: Optional[Dict[str, Any]], adapter: 
     return gate, account
 
 
-@router.post("/broker/order-review/manual-review-gate", response_model=StandardAgentResponse[Dict[str, Any]])
+async def _latest_protection_reconciliation_from_payload(
+    payload: Optional[Dict[str, Any]], adapter: BrokerAdapter
+) -> tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
+    safe_payload = payload if isinstance(payload, dict) else {}
+    proposals = safe_payload.get("risk_proposals") or []
+    if not isinstance(proposals, list):
+        raise HTTPException(status_code=422, detail="risk_proposals must be a list")
+
+    positions = await adapter.get_positions()
+    open_orders = await adapter.get_open_orders()
+    account = await adapter.get_account()
+    diagnostics = build_protection_diagnostics(positions, open_orders)
+    preview = build_protection_reconciliation_preview(diagnostics, proposals)
+    ticket = build_protection_reconciliation_ticket(preview)
+    preview = {**preview, "ticket": ticket}
+    return preview, account, diagnostics
+
+
+@router.post(
+    "/broker/order-review/manual-review-gate",
+    response_model=StandardAgentResponse[Dict[str, Any]],
+)
 async def manual_order_review_gate(
     payload: Optional[Dict[str, Any]] = None,
     adapter: BrokerAdapter = Depends(get_broker_adapter),
@@ -231,7 +268,10 @@ async def manual_order_review_gate(
     )
 
 
-@router.post("/broker/order-review/execute-approved-bracket-upgrade", response_model=StandardAgentResponse[Dict[str, Any]])
+@router.post(
+    "/broker/order-review/execute-approved-bracket-upgrade",
+    response_model=StandardAgentResponse[Dict[str, Any]],
+)
 async def execute_approved_bracket_upgrade(
     payload: Optional[Dict[str, Any]] = None,
     adapter: BrokerAdapter = Depends(get_broker_adapter),
@@ -240,6 +280,54 @@ async def execute_approved_bracket_upgrade(
     result = await execute_approved_paper_bracket_upgrade(
         payload=payload,
         gate=gate,
+        account=account,
+        adapter=adapter,
+        broker_mode=_broker_mode(),
+        trading_mode=_trading_mode(),
+    )
+    return StandardAgentResponse(
+        status="success" if result.get("status") in {"executed", "blocked"} else "error",
+        data=result,
+        confidence_score=1.0 if result.get("status") == "executed" else 0.7,
+    )
+
+
+@router.post(
+    "/broker/protection-reconciliation/preview",
+    response_model=StandardAgentResponse[Dict[str, Any]],
+)
+async def protection_reconciliation_preview(
+    payload: Optional[Dict[str, Any]] = None,
+    adapter: BrokerAdapter = Depends(get_broker_adapter),
+):
+    preview, _account, diagnostics = await _latest_protection_reconciliation_from_payload(
+        payload, adapter
+    )
+    return StandardAgentResponse(
+        status="success",
+        data={**preview, "protection_diagnostics": diagnostics},
+        confidence_score=(
+            1.0
+            if preview.get("summary", {}).get("blocked_count") == 0
+            else 0.7
+        ),
+    )
+
+
+@router.post(
+    "/broker/protection-reconciliation/execute",
+    response_model=StandardAgentResponse[Dict[str, Any]],
+)
+async def execute_protection_reconciliation(
+    payload: Optional[Dict[str, Any]] = None,
+    adapter: BrokerAdapter = Depends(get_broker_adapter),
+):
+    preview, account, _diagnostics = await _latest_protection_reconciliation_from_payload(
+        payload, adapter
+    )
+    result = await execute_approved_paper_protection_reconciliation(
+        payload=payload,
+        preview=preview,
         account=account,
         adapter=adapter,
         broker_mode=_broker_mode(),
