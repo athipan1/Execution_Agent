@@ -32,10 +32,6 @@ def _ticket_plan_material(plan: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _ticket_id(plans: List[Dict[str, Any]], reward_risk_ratio: float) -> str:
-    # Broker reads do not guarantee a stable position/order ordering. The ticket
-    # identity must describe the reviewed broker facts, not the transient list
-    # order returned by Alpaca or diagnostics, otherwise the manual gate may
-    # reject a still-valid ticket after rebuilding the latest broker snapshot.
     material = {
         "reward_risk_ratio": reward_risk_ratio,
         "plans": sorted(
@@ -70,17 +66,22 @@ def _blocked_plan(plan: Dict[str, Any], symbol: str) -> Dict[str, Any]:
     }
 
 
+def _next_step(
+    ready: List[Dict[str, Any]],
+    blocked: List[Dict[str, Any]],
+) -> str:
+    if ready:
+        return "review_ticket_then_use_a_separate_approved_execution_workflow"
+    if blocked:
+        return "resolve_blockers_then_refresh_order_review_preview"
+    return "no_manual_approval_required"
+
+
 def build_order_review_approval_ticket(
     preview: Dict[str, Any],
     payload: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
-    """Build a read-only manual approval ticket from an order review preview.
-
-    The ticket intentionally does not submit, cancel, or replace broker orders.
-    It freezes the symbols, quantities, existing stop orders, stop prices, and
-    proposed take-profit prices that a human/manual controller must review before
-    any separate broker-mutation endpoint is allowed to exist.
-    """
+    """Build a read-only manual approval ticket from an order review preview."""
     requested_symbols = _symbol_set(payload)
     plans = preview.get("plans") or []
     ready: List[Dict[str, Any]] = []
@@ -117,7 +118,23 @@ def build_order_review_approval_ticket(
         else:
             blocked.append(_blocked_plan(plan, symbol))
 
-    ticket = {
+    if requested_symbols and not ready and not no_action and not blocked:
+        blocked = [
+            {
+                "symbol": symbol,
+                "preview_status": "blocked_symbol_not_found_in_preview",
+                "reason": (
+                    "Requested symbol was not present in the latest order "
+                    "review preview."
+                ),
+                "recommended_next_step": (
+                    "refresh_preview_or_verify_current_broker_positions"
+                ),
+            }
+            for symbol in sorted(requested_symbols)
+        ]
+
+    return {
         "ticket_id": _ticket_id(
             ready,
             float(preview.get("reward_risk_ratio") or 2.0),
@@ -140,28 +157,5 @@ def build_order_review_approval_ticket(
         "ready_for_manual_approval": ready,
         "no_action_required": no_action,
         "blocked": blocked,
-        "next_step": (
-            "review_ticket_then_use_a_separate_approved_execution_workflow"
-            if ready
-            else "no_manual_approval_required"
-        ),
+        "next_step": _next_step(ready, blocked),
     }
-
-    if requested_symbols and not ready and not no_action and not blocked:
-        ticket["summary"]["blocked_count"] = len(requested_symbols)
-        ticket["blocked"] = [
-            {
-                "symbol": symbol,
-                "preview_status": "blocked_symbol_not_found_in_preview",
-                "reason": (
-                    "Requested symbol was not present in the latest order "
-                    "review preview."
-                ),
-                "recommended_next_step": (
-                    "refresh_preview_or_verify_current_broker_positions"
-                ),
-            }
-            for symbol in sorted(requested_symbols)
-        ]
-
-    return ticket
