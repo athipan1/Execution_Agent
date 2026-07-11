@@ -41,7 +41,7 @@ class RiskApprovalStatus(str, Enum):
     REVOKED = "revoked"
     EXPIRED = "expired"
 
-StrategyBucket = Literal["core_dividend", "value_rebound", "news_momentum", "unassigned"]
+StrategyBucket = Literal["core_dividend", "quality_growth", "value_rebound", "news_momentum", "unassigned"]
 TradePlanStatus = Literal["draft", "risk_pending", "risk_approved", "manual_approval_required", "execution_ready", "rejected"]
 TradePlanSource = Literal["single_analysis", "multi_analysis", "scanner", "manual", "replay"]
 
@@ -325,7 +325,6 @@ class RiskApproval(BaseModel):
     approved_quantity: int
     status: RiskApprovalStatus = RiskApprovalStatus.APPROVED
     expires_at: datetime
-    used_at: Optional[datetime] = None
     order_id: Optional[int] = None
 
 class ReconciliationItem(BaseModel):
