@@ -17,6 +17,7 @@ from app.models import (
 from app.services.execution_service import ExecutionService
 from app.services.strategy_bucket_contract import (
     StrategyBucketPersistenceError,
+    normalize_strategy_bucket,
     resolved_strategy_bucket_for_report,
 )
 
@@ -91,6 +92,17 @@ def order_request(**overrides):
     return CreateOrderRequest(**data)
 
 
+def test_quality_growth_is_a_supported_execution_bucket():
+    request = order_request(
+        symbol="ACGL",
+        trade_id="trade-acgl-quality-growth",
+        strategy_bucket="quality_growth",
+    )
+
+    assert request.strategy_bucket == "quality_growth"
+    assert normalize_strategy_bucket("quality_growth") == "quality_growth"
+
+
 @pytest.mark.asyncio
 async def test_matching_persisted_bucket_allows_order_and_consumes_approval():
     db = InMemoryDatabaseClient()
@@ -160,7 +172,11 @@ def test_report_resolution_never_lets_unassigned_hide_request_bucket():
 async def test_http_database_client_sends_strategy_bucket_and_reads_it_back():
     base_url = "http://db-agent"
     client = HttpDatabaseClient(base_url)
-    request = order_request(symbol="NVTS", trade_id="trade-nvts", strategy_bucket="news_momentum")
+    request = order_request(
+        symbol="NVTS",
+        trade_id="trade-nvts",
+        strategy_bucket="news_momentum",
+    )
 
     response_payload = {
         "order_id": 123,

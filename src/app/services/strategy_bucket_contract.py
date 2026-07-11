@@ -8,6 +8,7 @@ from fastapi import HTTPException
 
 VALID_STRATEGY_BUCKETS = {
     "core_dividend",
+    "quality_growth",
     "value_rebound",
     "news_momentum",
     "unassigned",
