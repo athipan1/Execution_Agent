@@ -4,7 +4,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 
-from app.adapters.alpaca import AlpacaAdapter
+from app.adapters.alpaca_hydrated import HydratedAlpacaAdapter
 from app.adapters.base import BrokerAdapter
 from app.adapters.simulator import SimulatorAdapter
 from app.config import settings
@@ -54,10 +54,16 @@ def _ensure_trading_enabled() -> None:
         )
 
 
+def _should_process_batch_now(auto_process: Optional[bool]) -> bool:
+    if auto_process is not None:
+        return bool(auto_process) and _trading_mode() == "PAPER"
+    return _trading_mode() == "PAPER"
+
+
 def get_broker_adapter() -> BrokerAdapter:
     broker_mode = _validate_broker_mode()
     if broker_mode == "ALPACA":
-        return AlpacaAdapter()
+        return HydratedAlpacaAdapter()
     return SimulatorAdapter()
 
 
