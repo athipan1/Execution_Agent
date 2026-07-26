@@ -396,5 +396,5 @@ class ReconciliationReport(BaseModel):
     checked: int = 0
     updated: int = 0
     skipped: int = 0
-    failed: int = 0
+    errors: int = 0
     items: List[ReconciliationItem] = Field(default_factory=list)
