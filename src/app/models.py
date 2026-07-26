@@ -8,18 +8,29 @@ EXECUTION_AGENT_VERSION = "1.0.0"
 EXECUTION_SERVICE_VERSION = "1.3.1"
 SCHEMA_VERSION = "1.0"
 
+
 class OrderSide(str, Enum):
     BUY = "buy"
     SELL = "sell"
+
 
 class OrderType(str, Enum):
     MARKET = "market"
     LIMIT = "limit"
 
+
 class TimeInForce(str, Enum):
+    DAY = "DAY"
     GTC = "GTC"
     IOC = "IOC"
     FOK = "FOK"
+
+    @classmethod
+    def _missing_(cls, value):
+        """Accept broker/database TIF values without weakening the enum contract."""
+        normalized = str(value or "").strip().upper()
+        return cls.__members__.get(normalized)
+
 
 class OrderStatus(str, Enum):
     PENDING = "pending"
@@ -29,11 +40,13 @@ class OrderStatus(str, Enum):
     FAILED = "failed"
     CANCELLED = "cancelled"
 
+
 class ExecutionJobStatus(str, Enum):
     QUEUED = "queued"
     RUNNING = "running"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
+
 
 class RiskApprovalStatus(str, Enum):
     APPROVED = "approved"
@@ -41,9 +54,30 @@ class RiskApprovalStatus(str, Enum):
     REVOKED = "revoked"
     EXPIRED = "expired"
 
-StrategyBucket = Literal["core_dividend", "quality_growth", "value_rebound", "news_momentum", "unassigned"]
-TradePlanStatus = Literal["draft", "risk_pending", "risk_approved", "manual_approval_required", "execution_ready", "rejected"]
-TradePlanSource = Literal["single_analysis", "multi_analysis", "scanner", "manual", "replay"]
+
+StrategyBucket = Literal[
+    "core_dividend",
+    "quality_growth",
+    "value_rebound",
+    "news_momentum",
+    "unassigned",
+]
+TradePlanStatus = Literal[
+    "draft",
+    "risk_pending",
+    "risk_approved",
+    "manual_approval_required",
+    "execution_ready",
+    "rejected",
+]
+TradePlanSource = Literal[
+    "single_analysis",
+    "multi_analysis",
+    "scanner",
+    "manual",
+    "replay",
+]
+
 
 class CreateOrderRequest(BaseModel):
     trade_id: Union[int, str] = Field(..., description="Globally unique trade ID")
@@ -74,10 +108,13 @@ class CreateOrderRequest(BaseModel):
         if self.final_quantity <= 0:
             raise ValueError("final_quantity must be greater than zero")
         if self.quantity != self.final_quantity:
-            raise ValueError("quantity must match final_quantity approved by Risk_Agent")
+            raise ValueError(
+                "quantity must match final_quantity approved by Risk_Agent"
+            )
         if not self.guard_plan and not self.protective_exit:
             raise ValueError("guard_plan or protective_exit is required")
         return self
+
 
 class TradePlanRiskEnvelope(BaseModel):
     account_equity: Optional[float] = Field(default=None, gt=0)
@@ -91,6 +128,7 @@ class TradePlanRiskEnvelope(BaseModel):
     session_risk_loaded: bool = False
     portfolio_context_loaded: bool = False
 
+
 class TradePlanExitEnvelope(BaseModel):
     stop_loss: Optional[float] = Field(default=None, gt=0)
     take_profit: Optional[float] = Field(default=None, gt=0)
@@ -99,6 +137,7 @@ class TradePlanExitEnvelope(BaseModel):
     partial_exit_pct: Optional[float] = Field(default=None, gt=0, lt=1)
     time_stop_minutes: Optional[int] = Field(default=None, gt=0)
     exit_reason: Optional[str] = None
+
 
 class TradePlanExecutionRequest(BaseModel):
     plan_id: str
@@ -162,12 +201,14 @@ class TradePlanExecutionRequest(BaseModel):
             metadata=self.metadata,
         )
 
+
 class TradeOrder(BaseModel):
     trade_id: Union[int, str]
     symbol: str
     quantity: int
     side: OrderSide
     order_type: OrderType = OrderType.MARKET
+
 
 class PortfolioRiskApproval(BaseModel):
     symbol: str
@@ -190,6 +231,7 @@ class PortfolioRiskApproval(BaseModel):
     risk: Optional[Dict[str, Any]] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
+
 class PortfolioExecutionRequest(BaseModel):
     account_id: Union[int, str]
     approvals: List[PortfolioRiskApproval]
@@ -200,6 +242,7 @@ class PortfolioExecutionRequest(BaseModel):
     side_by_symbol: Dict[str, OrderSide] = Field(default_factory=dict)
     default_side: OrderSide = OrderSide.BUY
     trade_id_prefix: str = "portfolio"
+
 
 class OrderResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -223,8 +266,10 @@ class OrderResponse(BaseModel):
     protective_exit: Optional[Dict[str, Any]] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
+
 class CreateOrderResponse(OrderResponse):
     pass
+
 
 class ExecutionResult(BaseModel):
     status: OrderStatus
@@ -236,16 +281,20 @@ class ExecutionResult(BaseModel):
     executed_at: Optional[datetime] = None
     reason: Optional[str] = None
 
+
 class HealthResponse(BaseModel):
     status: str
     broker_connected: bool
     mode: str
 
+
 class ErrorDetail(BaseModel):
     code: str
     message: str
 
+
 T = TypeVar("T")
+
 
 class StandardAgentResponse(BaseModel, Generic[T]):
     status: str
@@ -264,8 +313,11 @@ class StandardAgentResponse(BaseModel, Generic[T]):
     def schema_version_must_be_semantic(cls, value: str) -> str:
         parts = value.split(".")
         if not all(part.isdigit() for part in parts):
-            raise ValueError('Schema version must be in semantic format (e.g., "1.0")')
+            raise ValueError(
+                'Schema version must be in semantic format (e.g., "1.0")'
+            )
         return value
+
 
 class Order(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -289,6 +341,7 @@ class Order(BaseModel):
     protective_exit: Optional[Dict[str, Any]] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
+
 class FillPayload(BaseModel):
     order_id: int
     trade_id: Union[int, str]
@@ -305,6 +358,7 @@ class FillPayload(BaseModel):
     filled_at: Optional[datetime] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
+
 class ExecutionJob(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     job_id: Union[int, str]
@@ -317,6 +371,7 @@ class ExecutionJob(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
+
 class RiskApproval(BaseModel):
     approval_id: str
     account_id: Union[int, str]
@@ -327,6 +382,7 @@ class RiskApproval(BaseModel):
     expires_at: datetime
     order_id: Optional[int] = None
 
+
 class ReconciliationItem(BaseModel):
     order_id: int
     broker_order_id: Optional[str] = None
@@ -334,6 +390,7 @@ class ReconciliationItem(BaseModel):
     current_status: Optional[OrderStatus] = None
     action: str
     message: Optional[str] = None
+
 
 class ReconciliationReport(BaseModel):
     checked: int = 0
