@@ -30,7 +30,7 @@ def protected_order(**overrides):
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_paper_alpaca_entry_payload_allows_oto_stop_loss():
+async def test_paper_alpaca_rejects_stop_loss_only_before_broker_call():
     adapter = AlpacaAdapter()
     order_request = respx.post(f"{settings.ALPACA_API_URL}/v2/orders").mock(
         return_value=Response(200, json={"id": "broker-order-id-123", "status": "accepted"})
@@ -40,17 +40,11 @@ async def test_paper_alpaca_entry_payload_allows_oto_stop_loss():
     with patch("app.adapters.alpaca.settings.TRADING_MODE", "PAPER"):
         await adapter.place_order(protected_order(), update_callback)
 
-    assert order_request.called
-    payload = order_request.calls.last.request.content.decode("utf-8")
-    assert '"order_class":"oto"' in payload
-    assert '"stop_loss":{"stop_price":"90.0"}' in payload
-    update_callback.assert_awaited_once_with({
-        "order_id": 1,
-        "status": OrderStatus.PLACED,
-        "broker_order_id": "broker-order-id-123",
-        "executed_quantity": 0,
-        "broker_status": "accepted",
-    })
+    assert not order_request.called
+    update_callback.assert_awaited_once()
+    update = update_callback.await_args.args[0]
+    assert update["status"] == OrderStatus.FAILED
+    assert "take_profit_price is required" in update["reason"]
 
 
 @pytest.mark.asyncio
@@ -107,8 +101,8 @@ async def test_live_alpaca_submits_bracket_order_when_tp_and_sl_exist():
     assert order_request.called
     payload = order_request.calls.last.request.content.decode("utf-8")
     assert '"order_class":"bracket"' in payload
-    assert '"stop_loss":{"stop_price":"90.0"}' in payload
-    assert '"take_profit":{"limit_price":"120.0"}' in payload
+    assert '"stop_loss":{"stop_price":"90"}' in payload
+    assert '"take_profit":{"limit_price":"120"}' in payload
 
     update_callback.assert_awaited_once_with({
         "order_id": 1,

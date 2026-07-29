@@ -16,6 +16,10 @@ from app.services.protective_order_service import (
 
     build_alpaca_entry_payload,
 
+    build_alpaca_reduce_only_exit_payload,
+
+    is_profit_lifecycle_exit,
+
 )
 
 logger = get_logger(__name__)
@@ -208,23 +212,31 @@ class AlpacaAdapter(BrokerAdapter):
 
         headers["Content-Type"] = "application/json"
 
+        reduce_only_exit = is_profit_lifecycle_exit(order)
+
         try:
 
-            payload = build_alpaca_entry_payload(
+            if reduce_only_exit:
 
-                order,
+                payload = build_alpaca_reduce_only_exit_payload(order)
 
-                require_protection=True,
+            else:
 
-                require_bracket=True,
+                payload = build_alpaca_entry_payload(
 
-            )
+                    order,
+
+                    require_protection=True,
+
+                    require_bracket=True,
+
+                )
 
         except ProtectiveOrderError as exc:
 
             logger.error(
 
-                "Refusing to submit unprotected or invalid Alpaca bracket order.",
+                "Refusing to submit invalid Alpaca order safety contract.",
 
                 extra={
 
@@ -234,7 +246,15 @@ class AlpacaAdapter(BrokerAdapter):
 
                     "error": str(exc),
 
-                    "required_protection": "bracket",
+                    "required_protection": (
+
+                        "reduce_only_profit_exit"
+
+                        if reduce_only_exit
+
+                        else "bracket"
+
+                    ),
 
                     "orders_changed": False,
 
@@ -246,7 +266,15 @@ class AlpacaAdapter(BrokerAdapter):
 
         logger.info(
 
-            "Submitting Alpaca bracket-protected entry order.",
+            (
+
+                "Submitting Alpaca reduce-only profit lifecycle exit."
+
+                if reduce_only_exit
+
+                else "Submitting Alpaca bracket-protected entry order."
+
+            ),
 
             extra={
 
@@ -254,7 +282,15 @@ class AlpacaAdapter(BrokerAdapter):
 
                 "symbol": order.symbol,
 
-                "order_class": payload.get("order_class"),
+                "order_class": (
+
+                    "reduce_only_exit"
+
+                    if reduce_only_exit
+
+                    else payload.get("order_class")
+
+                ),
 
                 "has_stop_loss": bool(payload.get("stop_loss")),
 

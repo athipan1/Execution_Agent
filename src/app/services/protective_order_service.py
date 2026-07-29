@@ -16,6 +16,8 @@ class ProtectiveOrderError(ValueError):
 
 REQUIRE_BROKER_SIDE_TP_SL_FOR_ENTRY = True
 
+PROFIT_LIFECYCLE_EXIT_TYPE = "profit_lifecycle_exit"
+
 def _as_float(value: Any, field_name: str) -> float:
 
     try:
@@ -103,6 +105,139 @@ def protection_plan(order: Order) -> Optional[Dict[str, Any]]:
     plan = order.protective_exit or order.guard_plan
 
     return dict(plan) if isinstance(plan, dict) else None
+
+
+def is_profit_lifecycle_exit(order: Order) -> bool:
+
+    """Return whether an order declares a Manager-owned reduce-only profit exit."""
+
+    plan = order.protective_exit
+
+    return isinstance(plan, dict) and plan.get("reduce_only_intent") is True
+
+
+def validate_profit_lifecycle_exit(order: Order) -> Dict[str, Any]:
+
+    """Validate the narrow reduce-only contract before bypassing entry protection."""
+
+    plan = order.protective_exit
+
+    if not isinstance(plan, dict) or plan.get("reduce_only_intent") is not True:
+
+        raise ProtectiveOrderError(
+
+            "reduce-only profit exit requires protective_exit.reduce_only_intent=true"
+
+        )
+
+    if str(plan.get("type") or "").strip().lower() != PROFIT_LIFECYCLE_EXIT_TYPE:
+
+        raise ProtectiveOrderError(
+
+            f"reduce-only profit exit type must be {PROFIT_LIFECYCLE_EXIT_TYPE}"
+
+        )
+
+    if order.side != OrderSide.SELL:
+
+        raise ProtectiveOrderError(
+
+            "reduce-only profit lifecycle exit must use side=sell"
+
+        )
+
+    decision_id = str(plan.get("decision_id") or "").strip()
+
+    if not decision_id:
+
+        raise ProtectiveOrderError(
+
+            "reduce-only profit lifecycle exit requires decision_id"
+
+        )
+
+    if decision_id != str(order.trade_id):
+
+        raise ProtectiveOrderError(
+
+            "reduce-only profit lifecycle exit decision_id must match trade_id"
+
+        )
+
+    symbol = _normalize_symbol(plan.get("symbol") or order.symbol)
+
+    if symbol != _normalize_symbol(order.symbol):
+
+        raise ProtectiveOrderError(
+
+            "reduce-only profit lifecycle exit symbol must match order symbol"
+
+        )
+
+    quantity = int(
+
+        _as_float(plan.get("quantity", order.quantity), "reduce-only quantity")
+
+    )
+
+    if quantity != int(order.quantity):
+
+        raise ProtectiveOrderError(
+
+            "reduce-only profit lifecycle exit quantity must match order quantity"
+
+        )
+
+    return {
+
+        "type": PROFIT_LIFECYCLE_EXIT_TYPE,
+
+        "reduce_only_intent": True,
+
+        "decision_id": decision_id,
+
+        "symbol": symbol,
+
+        "side": order.side.value,
+
+        "quantity": quantity,
+
+    }
+
+
+def build_alpaca_reduce_only_exit_payload(order: Order) -> Dict[str, Any]:
+
+    """Build a plain Alpaca closing order without attaching a nested bracket."""
+
+    validate_profit_lifecycle_exit(order)
+
+    payload: Dict[str, Any] = {
+
+        "side": order.side.value,
+
+        "symbol": order.symbol.upper(),
+
+        "qty": str(order.quantity),
+
+        "type": order.order_type.value,
+
+        "time_in_force": order.time_in_force.value.lower(),
+
+    }
+
+    if order.order_type == OrderType.LIMIT:
+
+        if order.price is None:
+
+            raise ProtectiveOrderError(
+
+                "limit reduce-only profit exit requires price"
+
+            )
+
+        payload["limit_price"] = alpaca_price(order.price, "limit_price")
+
+    return payload
 
 def validate_protection_plan(
 

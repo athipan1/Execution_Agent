@@ -32,4 +32,5 @@ jobs:
           tests/test_db_client.py \
           tests/test_reconciliation.py \
           tests/test_reconciliation_day_time_in_force.py \
+          tests/test_profit_reduce_only_exit.py \
           --maxfail=1 --disable-warnings -q

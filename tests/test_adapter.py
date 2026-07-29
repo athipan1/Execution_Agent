@@ -20,7 +20,12 @@ def base_order():
         side=OrderSide.BUY,
         order_type=OrderType.MARKET,
         quantity=100,
-        time_in_force=TimeInForce.GTC
+        time_in_force=TimeInForce.GTC,
+        guard_plan={
+            "side": "sell",
+            "quantity": 100,
+            "trigger_price": 90,
+        },
     )
 
 async def test_successful_execution(simulator: SimulatorAdapter, base_order: Order):
