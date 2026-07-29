@@ -1,4 +1,4 @@
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 from typing import Any, Dict, Optional
 
@@ -17,6 +17,38 @@ class ProtectiveOrderError(ValueError):
 REQUIRE_BROKER_SIDE_TP_SL_FOR_ENTRY = True
 
 PROFIT_LIFECYCLE_EXIT_TYPE = "profit_lifecycle_exit"
+
+def _as_positive_integral(value: Any, field_name: str) -> int:
+
+    try:
+
+        amount = Decimal(str(value))
+
+    except (InvalidOperation, TypeError, ValueError) as exc:
+
+        raise ProtectiveOrderError(
+
+            f"{field_name} must be a positive whole number"
+
+        ) from exc
+
+    if (
+
+        not amount.is_finite()
+
+        or amount <= 0
+
+        or amount != amount.to_integral_value()
+
+    ):
+
+        raise ProtectiveOrderError(
+
+            f"{field_name} must be a positive whole number"
+
+        )
+
+    return int(amount)
 
 def _as_float(value: Any, field_name: str) -> float:
 
@@ -109,11 +141,23 @@ def protection_plan(order: Order) -> Optional[Dict[str, Any]]:
 
 def is_profit_lifecycle_exit(order: Order) -> bool:
 
-    """Return whether an order declares a Manager-owned reduce-only profit exit."""
+    """Return whether an order claims the Manager-owned profit-exit contract."""
 
     plan = order.protective_exit
 
-    return isinstance(plan, dict) and plan.get("reduce_only_intent") is True
+    if not isinstance(plan, dict):
+
+        return False
+
+    declared_type = str(plan.get("type") or "").strip().lower()
+
+    return (
+
+        declared_type == PROFIT_LIFECYCLE_EXIT_TYPE
+
+        or "reduce_only_intent" in plan
+
+    )
 
 
 def validate_profit_lifecycle_exit(order: Order) -> Dict[str, Any]:
@@ -174,9 +218,11 @@ def validate_profit_lifecycle_exit(order: Order) -> Dict[str, Any]:
 
         )
 
-    quantity = int(
+    quantity = _as_positive_integral(
 
-        _as_float(plan.get("quantity", order.quantity), "reduce-only quantity")
+        plan.get("quantity", order.quantity),
+
+        "reduce-only quantity",
 
     )
 
@@ -185,6 +231,56 @@ def validate_profit_lifecycle_exit(order: Order) -> Dict[str, Any]:
         raise ProtectiveOrderError(
 
             "reduce-only profit lifecycle exit quantity must match order quantity"
+
+        )
+
+    metadata = order.metadata if isinstance(order.metadata, dict) else {}
+
+    if str(metadata.get("profit_decision_id") or "").strip() != decision_id:
+
+        raise ProtectiveOrderError(
+
+            "reduce-only profit lifecycle exit metadata.profit_decision_id "
+
+            "must match decision_id"
+
+        )
+
+    position_id = str(metadata.get("position_id") or "").strip()
+
+    if not position_id:
+
+        raise ProtectiveOrderError(
+
+            "reduce-only profit lifecycle exit requires metadata.position_id"
+
+        )
+
+    position_version = _as_positive_integral(
+
+        metadata.get("position_version"),
+
+        "metadata.position_version",
+
+    )
+
+    correlation_id = str(metadata.get("correlation_id") or "").strip()
+
+    if not correlation_id:
+
+        raise ProtectiveOrderError(
+
+            "reduce-only profit lifecycle exit requires metadata.correlation_id"
+
+        )
+
+    if str(metadata.get("advisory_source") or "").strip() != "profit-agent":
+
+        raise ProtectiveOrderError(
+
+            "reduce-only profit lifecycle exit metadata.advisory_source "
+
+            "must be profit-agent"
 
         )
 
@@ -202,42 +298,36 @@ def validate_profit_lifecycle_exit(order: Order) -> Dict[str, Any]:
 
         "quantity": quantity,
 
+        "position_id": position_id,
+
+        "position_version": position_version,
+
+        "correlation_id": correlation_id,
+
     }
 
 
 def build_alpaca_reduce_only_exit_payload(order: Order) -> Dict[str, Any]:
 
-    """Build a plain Alpaca closing order without attaching a nested bracket."""
+    """Build parameters for Alpaca's position-closing endpoint."""
 
-    validate_profit_lifecycle_exit(order)
+    contract = validate_profit_lifecycle_exit(order)
 
-    payload: Dict[str, Any] = {
+    if order.order_type != OrderType.MARKET:
 
-        "side": order.side.value,
+        raise ProtectiveOrderError(
 
-        "symbol": order.symbol.upper(),
+            "Alpaca reduce-only profit exit supports market orders only"
 
-        "qty": str(order.quantity),
+        )
 
-        "type": order.order_type.value,
+    return {
 
-        "time_in_force": order.time_in_force.value.lower(),
+        "symbol_or_asset_id": contract["symbol"],
+
+        "qty": str(contract["quantity"]),
 
     }
-
-    if order.order_type == OrderType.LIMIT:
-
-        if order.price is None:
-
-            raise ProtectiveOrderError(
-
-                "limit reduce-only profit exit requires price"
-
-            )
-
-        payload["limit_price"] = alpaca_price(order.price, "limit_price")
-
-    return payload
 
 def validate_protection_plan(
 
