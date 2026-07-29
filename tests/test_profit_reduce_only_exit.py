@@ -39,6 +39,7 @@ def reduce_only_order(**overrides):
             "position_id": "account-1:position-42",
             "position_version": 7,
             "correlation_id": "corr-profit-exit",
+            "advisory_source": "profit-agent",
         },
     }
     data.update(overrides)
@@ -58,17 +59,14 @@ def test_reduce_only_profit_exit_contract_is_narrow_and_deterministic():
         "symbol": "ACGL",
         "side": "sell",
         "quantity": 3,
+        "position_id": "account-1:position-42",
+        "position_version": 7,
+        "correlation_id": "corr-profit-exit",
     }
     assert payload == {
-        "side": "sell",
-        "symbol": "ACGL",
+        "symbol_or_asset_id": "ACGL",
         "qty": "3",
-        "type": "market",
-        "time_in_force": "gtc",
     }
-    assert "order_class" not in payload
-    assert "stop_loss" not in payload
-    assert "take_profit" not in payload
 
 
 @pytest.mark.parametrize(
@@ -90,12 +88,49 @@ def test_reduce_only_profit_exit_contract_is_narrow_and_deterministic():
             },
             "type must be profit_lifecycle_exit",
         ),
+        (
+            {
+                "type": "profit_lifecycle_exit",
+                "reduce_only_intent": True,
+                "decision_id": DECISION_ID,
+                "quantity": 3.5,
+            },
+            "quantity must be a positive whole number",
+        ),
     ],
 )
 def test_invalid_reduce_only_contract_fails_closed(protective_exit, message):
     with pytest.raises(ProtectiveOrderError, match=message):
         validate_profit_lifecycle_exit(
             reduce_only_order(protective_exit=protective_exit)
+        )
+
+
+def test_reduce_only_contract_requires_matching_profit_metadata():
+    order = reduce_only_order(
+        metadata={
+            "profit_decision_id": "wrong-decision",
+            "position_id": "account-1:position-42",
+            "position_version": 7,
+            "correlation_id": "corr-profit-exit",
+            "advisory_source": "profit-agent",
+        }
+    )
+
+    with pytest.raises(
+        ProtectiveOrderError,
+        match=r"metadata\.profit_decision_id must match decision_id",
+    ):
+        validate_profit_lifecycle_exit(order)
+
+
+def test_alpaca_reduce_only_contract_rejects_limit_orders():
+    with pytest.raises(
+        ProtectiveOrderError,
+        match="supports market orders only",
+    ):
+        build_alpaca_reduce_only_exit_payload(
+            reduce_only_order(order_type=OrderType.LIMIT, price=107)
         )
 
 
@@ -119,27 +154,35 @@ async def test_simulator_executes_reduce_only_profit_exit_without_nested_bracket
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_alpaca_submits_plain_sell_for_reduce_only_profit_exit():
+async def test_alpaca_uses_close_position_endpoint_for_reduce_only_profit_exit():
     settings.ALPACA_API_KEY_ID = "test_api_key_id"
     settings.ALPACA_SECRET_KEY = "test_secret_key"
     adapter = AlpacaAdapter()
-    order_route = respx.post(f"{settings.ALPACA_API_URL}/v2/orders").mock(
+    close_route = respx.delete(
+        f"{settings.ALPACA_API_URL}/v2/positions/ACGL",
+        params={"qty": "3"},
+    ).mock(
         return_value=Response(
             200,
-            json={"id": "profit-exit-order-1", "status": "accepted"},
+            json={
+                "id": "profit-exit-order-1",
+                "status": "accepted",
+                "symbol": "ACGL",
+                "side": "sell",
+                "qty": "3",
+            },
         )
+    )
+    order_route = respx.post(f"{settings.ALPACA_API_URL}/v2/orders").mock(
+        return_value=Response(500)
     )
     callback = AsyncMock()
 
     await adapter.place_order(reduce_only_order(), callback)
 
-    assert order_route.called
-    payload = order_route.calls.last.request.content.decode("utf-8")
-    assert '"side":"sell"' in payload
-    assert '"qty":"3"' in payload
-    assert '"order_class"' not in payload
-    assert '"stop_loss"' not in payload
-    assert '"take_profit"' not in payload
+    assert close_route.called
+    assert not order_route.called
+    assert close_route.calls.last.request.url.params["qty"] == "3"
     callback.assert_awaited_once_with(
         {
             "order_id": 42,

@@ -1,5 +1,7 @@
 import httpx
 
+import urllib.parse
+
 from typing import Optional, Dict, Any, List
 
 from app.adapters.base import BrokerAdapter, StatusUpdateCallable
@@ -55,6 +57,8 @@ class AlpacaAdapter(BrokerAdapter):
     - New Alpaca entry orders must be broker-side protected.
 
     - Both Paper and Live modes require bracket protection: entry + take profit + stop loss.
+
+    - Profit lifecycle exits use Alpaca's position-closing endpoint so they cannot open a short.
 
     - If Risk/Manager does not provide a valid TP/SL plan, the order is rejected before reaching Alpaca.
 
@@ -268,7 +272,9 @@ class AlpacaAdapter(BrokerAdapter):
 
             (
 
-                "Submitting Alpaca reduce-only profit lifecycle exit."
+                "Submitting Alpaca reduce-only profit lifecycle exit "
+
+                "through the close-position endpoint."
 
                 if reduce_only_exit
 
@@ -301,6 +307,26 @@ class AlpacaAdapter(BrokerAdapter):
         )
 
         try:
+
+            if reduce_only_exit:
+
+                encoded_symbol = urllib.parse.quote(
+
+                    str(payload["symbol_or_asset_id"]),
+
+                    safe="",
+
+                )
+
+                return await self._client.delete(
+
+                    self._url(f"/v2/positions/{encoded_symbol}"),
+
+                    headers=headers,
+
+                    params={"qty": payload["qty"]},
+
+                )
 
             return await self._client.post(
 
