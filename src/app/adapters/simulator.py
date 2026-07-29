@@ -14,6 +14,10 @@ from app.services.protective_order_service import (
 
     ProtectiveOrderError,
 
+    is_profit_lifecycle_exit,
+
+    validate_profit_lifecycle_exit,
+
     validate_protection_plan,
 
 )
@@ -48,9 +52,19 @@ class SimulatorAdapter(BrokerAdapter):
 
         """
 
+        reduce_only_exit = is_profit_lifecycle_exit(order)
+
         try:
 
-            protection = validate_protection_plan(order, required=True)
+            protection = (
+
+                validate_profit_lifecycle_exit(order)
+
+                if reduce_only_exit
+
+                else validate_protection_plan(order, required=True)
+
+            )
 
         except ProtectiveOrderError as exc:
 
@@ -62,7 +76,7 @@ class SimulatorAdapter(BrokerAdapter):
 
                     "status": OrderStatus.FAILED,
 
-                    "reason": f"Missing or invalid simulated protective exit: {exc}",
+                    "reason": f"Missing or invalid simulated order safety contract: {exc}",
 
                     "orders_changed": False,
 
@@ -72,7 +86,15 @@ class SimulatorAdapter(BrokerAdapter):
 
             return
 
-        broker_order_id = f"sim-bracket-{uuid.uuid4()}"
+        broker_order_id = (
+
+            f"sim-profit-exit-{uuid.uuid4()}"
+
+            if reduce_only_exit
+
+            else f"sim-bracket-{uuid.uuid4()}"
+
+        )
 
         update = {
 
@@ -82,15 +104,27 @@ class SimulatorAdapter(BrokerAdapter):
 
             "broker_order_id": broker_order_id,
 
-            "order_class": "bracket",
+            "order_class": "reduce_only_exit" if reduce_only_exit else "bracket",
 
             "orders_changed": True,
 
-            "protection_required": True,
+            "protection_required": not reduce_only_exit,
+
+            "reduce_only_intent": reduce_only_exit,
 
         }
 
-        if protection:
+        if reduce_only_exit:
+
+            update["reason"] = (
+
+                "Simulated reduce-only profit lifecycle exit accepted"
+
+            )
+
+            update["protective_exit"] = protection
+
+        elif protection:
 
             update["reason"] = (
 
