@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException
@@ -12,6 +13,7 @@ from app.db_client import get_db_client
 from app.models import (
     CreateOrderResponse,
     ExecutionJob,
+    OrderType,
     StandardAgentResponse,
     TradePlanExecutionRequest,
 )
@@ -21,6 +23,8 @@ from app.services.order_review_plan import build_order_review_plan
 from app.services.protection_diagnostics import build_protection_diagnostics
 
 router = APIRouter()
+
+EXECUTION_COST_CONTEXT_SCHEMA_VERSION = "execution-cost-context.v1"
 
 
 def _trading_mode() -> str:
@@ -85,6 +89,63 @@ def _order_response_payload(order) -> Dict[str, Any]:
     return CreateOrderResponse.model_validate(order).model_dump(mode="json")
 
 
+def _optional_non_negative_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(parsed) or parsed < 0:
+        return None
+    return parsed
+
+
+def _execution_cost_context(trade_plan: TradePlanExecutionRequest) -> Dict[str, Any]:
+    """Build canonical decision-time context without changing order semantics.
+
+    The context is deliberately derived from validated TradePlan fields after any
+    caller metadata has been received, so a caller cannot overwrite canonical
+    decision price, strategy, correlation, or lifecycle identity. Missing market
+    evidence stays missing instead of being synthesized.
+    """
+
+    metadata = trade_plan.metadata if isinstance(trade_plan.metadata, dict) else {}
+    regime = metadata.get("regime") or metadata.get("market_regime") or "unknown"
+    spread_bps = _optional_non_negative_float(
+        metadata.get("spread_bps_at_decision", metadata.get("spread_bps"))
+    )
+    decision_price = trade_plan.entry_price or trade_plan.limit_price
+    submitted_price = (
+        trade_plan.limit_price if trade_plan.order_type == OrderType.LIMIT else None
+    )
+    return {
+        "schema_version": EXECUTION_COST_CONTEXT_SCHEMA_VERSION,
+        "trade_plan_id": trade_plan.plan_id,
+        "correlation_id": trade_plan.correlation_id,
+        "source": trade_plan.source,
+        "strategy": trade_plan.strategy.strip().lower() or "unassigned",
+        "strategy_bucket": trade_plan.strategy_bucket,
+        "regime": str(regime).strip().lower() or "unknown",
+        "decision_price": decision_price,
+        "submitted_price": submitted_price,
+        "spread_bps_at_decision": spread_bps,
+        "paper_calibration_eligible": _trading_mode() == "PAPER",
+    }
+
+
+def _attach_execution_cost_context(
+    trade_plan: TradePlanExecutionRequest,
+    order_request,
+):
+    """Attach immutable canonical telemetry to order metadata before persistence."""
+
+    metadata = dict(order_request.metadata or {})
+    metadata["execution_cost_context"] = _execution_cost_context(trade_plan)
+    order_request.metadata = metadata
+    return order_request
+
+
 def _execution_payload(
     *,
     trade_plan: TradePlanExecutionRequest,
@@ -109,6 +170,9 @@ def _execution_payload(
             "price": order_request.price,
             "has_guard_plan": bool(order_request.guard_plan),
             "has_protective_exit": bool(order_request.protective_exit),
+            "execution_cost_context": (order_request.metadata or {}).get(
+                "execution_cost_context"
+            ),
         },
         "order": _order_response_payload(order),
         "execution_job": job.model_dump(mode="json"),
@@ -124,10 +188,13 @@ async def create_order_from_trade_plan(
     """Create an execution order from a risk-approved TradePlan.
 
     This reuses the existing ExecutionService create/enqueue path after converting
-    the TradePlan into the established CreateOrderRequest contract.
+    the TradePlan into the established CreateOrderRequest contract. Canonical
+    decision-time execution-cost context is added to metadata only; broker order
+    type, price, quantity, protection, and mutation behavior are unchanged.
     """
     _ensure_trading_enabled()
     order_request = trade_plan.to_order_request()
+    order_request = _attach_execution_cost_context(trade_plan, order_request)
     order_request.trade_id = idempotency_key or order_request.trade_id
     order = await service.create_order(order_request)
     job = await service.enqueue_order_execution(order)
