@@ -115,6 +115,14 @@ class CreateOrderRequest(BaseModel):
             raise ValueError("guard_plan or protective_exit is required")
         return self
 
+    @model_validator(mode="after")
+    def validate_not_shadow_order(self) -> "CreateOrderRequest":
+        execution_mode = str(self.metadata.get("execution_mode") or "").strip().lower()
+        lane = str(self.metadata.get("lane") or "").strip().lower()
+        if execution_mode == "shadow" or lane == "shadow":
+            raise ValueError("shadow_lane_cannot_execute_broker_orders")
+        return self
+
 
 class TradePlanRiskEnvelope(BaseModel):
     account_equity: Optional[float] = Field(default=None, gt=0)
