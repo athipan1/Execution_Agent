@@ -54,6 +54,17 @@ def _ensure_trading_enabled() -> None:
         )
 
 
+def _ensure_not_shadow_execution(trade_plan: TradePlanExecutionRequest) -> None:
+    metadata = trade_plan.metadata or {}
+    execution_mode = str(metadata.get("execution_mode") or "").strip().lower()
+    lane = str(metadata.get("lane") or "").strip().lower()
+    if execution_mode == "shadow" or lane == "shadow":
+        raise HTTPException(
+            status_code=403,
+            detail="shadow_lane_cannot_execute_broker_orders",
+        )
+
+
 def _should_process_batch_now(auto_process: Optional[bool]) -> bool:
     if auto_process is not None:
         return bool(auto_process) and _trading_mode() == "PAPER"
@@ -126,6 +137,7 @@ async def create_order_from_trade_plan(
     This reuses the existing ExecutionService create/enqueue path after converting
     the TradePlan into the established CreateOrderRequest contract.
     """
+    _ensure_not_shadow_execution(trade_plan)
     _ensure_trading_enabled()
     order_request = trade_plan.to_order_request()
     order_request.trade_id = idempotency_key or order_request.trade_id
