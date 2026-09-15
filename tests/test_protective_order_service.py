@@ -52,15 +52,9 @@ def test_rejects_quantity_mismatch():
         validate_protection_plan(protected_order, required=True)
 
 
-def test_builds_oto_stop_loss_payload_for_stop_only_plan_when_bracket_not_required():
-    payload = build_alpaca_entry_payload(order(), require_protection=True)
-
-    assert payload["symbol"] == "AAPL"
-    assert payload["side"] == "buy"
-    assert payload["qty"] == "10"
-    assert payload["type"] == "market"
-    assert payload["order_class"] == "oto"
-    assert payload["stop_loss"] == {"stop_price": "90.0"}
+def test_stop_only_plan_cannot_relax_mandatory_bracket_policy():
+    with pytest.raises(ProtectiveOrderError, match="take_profit_price"):
+        build_alpaca_entry_payload(order(), require_protection=True, require_bracket=False)
 
 
 def test_builds_bracket_payload_when_take_profit_is_supplied():
@@ -71,8 +65,8 @@ def test_builds_bracket_payload_when_take_profit_is_supplied():
     payload = build_alpaca_entry_payload(protected_order, require_protection=True)
 
     assert payload["order_class"] == "bracket"
-    assert payload["stop_loss"] == {"stop_price": "90.0"}
-    assert payload["take_profit"] == {"limit_price": "120.0"}
+    assert payload["stop_loss"] == {"stop_price": "90"}
+    assert payload["take_profit"] == {"limit_price": "120"}
 
 
 def test_requires_guard_plan_when_configured():
@@ -95,8 +89,8 @@ def test_builds_bracket_payload_when_bracket_is_required_and_take_profit_exists(
     payload = build_alpaca_entry_payload(protected_order, require_bracket=True)
 
     assert payload["order_class"] == "bracket"
-    assert payload["stop_loss"] == {"stop_price": "90.0"}
-    assert payload["take_profit"] == {"limit_price": "120.0"}
+    assert payload["stop_loss"] == {"stop_price": "90"}
+    assert payload["take_profit"] == {"limit_price": "120"}
 
 
 def test_rejects_bad_take_profit_direction_when_reference_price_exists():
