@@ -76,10 +76,10 @@ async def test_reconcile_can_skip_push_when_requested():
 
 
 @pytest.mark.asyncio
-async def test_push_broker_state_to_database_success(monkeypatch, respx):
+async def test_push_broker_state_to_database_success(monkeypatch, respx_mock):
     monkeypatch.setattr("app.services.broker_state_reconciliation.settings.DB_AGENT_URL", "http://database-agent:8000")
     monkeypatch.setattr("app.services.broker_state_reconciliation.settings.BROKER_SYNC_ENDPOINT", "/broker-sync")
-    route = respx.post("http://database-agent:8000/broker-sync").respond(200, json={"status": "success", "data": {"synced": True}})
+    route = respx_mock.post("http://database-agent:8000/broker-sync").respond(200, json={"status": "success", "data": {"synced": True}})
     service = BrokerStateReconciliationService(FakeBroker())
     broker_state = await service.collect_broker_state(account_id=1)
 
@@ -91,10 +91,10 @@ async def test_push_broker_state_to_database_success(monkeypatch, respx):
 
 
 @pytest.mark.asyncio
-async def test_push_broker_state_to_database_failure_does_not_drop_state(monkeypatch, respx):
+async def test_push_broker_state_to_database_failure_does_not_drop_state(monkeypatch, respx_mock):
     monkeypatch.setattr("app.services.broker_state_reconciliation.settings.DB_AGENT_URL", "http://database-agent:8000")
     monkeypatch.setattr("app.services.broker_state_reconciliation.settings.BROKER_SYNC_ENDPOINT", "/broker-sync")
-    respx.post("http://database-agent:8000/broker-sync").respond(500, json={"status": "error"})
+    respx_mock.post("http://database-agent:8000/broker-sync").respond(500, json={"status": "error"})
     service = BrokerStateReconciliationService(FakeBroker())
     broker_state = await service.collect_broker_state(account_id=1)
 

@@ -452,9 +452,9 @@ def _order_request_diagnostics(order_request: CreateOrderRequest) -> Dict[str, A
 
         "symbol": order_request.symbol,
 
-        "side": str(order_request.side),
+        "side": order_request.side.value,
 
-        "order_type": str(order_request.order_type),
+        "order_type": order_request.order_type.value,
 
         "price": order_request.price,
 
@@ -462,7 +462,7 @@ def _order_request_diagnostics(order_request: CreateOrderRequest) -> Dict[str, A
 
         "final_quantity": order_request.final_quantity,
 
-        "time_in_force": str(order_request.time_in_force),
+        "time_in_force": order_request.time_in_force.value,
 
         "strategy_bucket": order_request.strategy_bucket,
 
@@ -510,9 +510,9 @@ def _execution_failure_detail(
 
         "trading_mode": _trading_mode(),
 
-        "order_status": str(order.status),
+        "order_status": order.status.value,
 
-        "job_status": str(job.status),
+        "job_status": job.status.value,
 
         "job_last_error": job.last_error,
 
@@ -652,7 +652,7 @@ def _created_batch_row(
 
         "trade_id": order.trade_id,
 
-        "status": str(order.status),
+        "status": order.status.value,
 
         "broker_order_id": order.broker_order_id,
 
@@ -1154,6 +1154,7 @@ async def _run_broker_state_reconcile(
 
     )
 
+@app.post("/broker/reconcile-state", response_model=StandardAgentResponse[Dict[str, Any]])
 @app.post("/broker/reconcile", response_model=StandardAgentResponse[Dict[str, Any]])
 
 async def broker_reconcile(

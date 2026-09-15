@@ -154,7 +154,8 @@ async def test_simulator_executes_reduce_only_profit_exit_without_nested_bracket
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_alpaca_uses_close_position_endpoint_for_reduce_only_profit_exit():
+async def test_alpaca_uses_close_position_endpoint_for_reduce_only_profit_exit(open_clock):
+    respx.get(f"{settings.ALPACA_API_URL}/v2/clock").respond(200, json=open_clock)
     settings.ALPACA_API_KEY_ID = "test_api_key_id"
     settings.ALPACA_SECRET_KEY = "test_secret_key"
     adapter = AlpacaAdapter()

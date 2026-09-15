@@ -9,6 +9,7 @@ from app.adapters.base import BrokerAdapter, StatusUpdateCallable
 from app.models import Order, OrderStatus, TradeOrder
 
 from app.config import settings
+from app.services.execution_session import validate_execution_clock
 
 from app.logging import get_logger
 
@@ -89,6 +90,13 @@ class AlpacaAdapter(BrokerAdapter):
             "APCA-API-SECRET-KEY": self.secret_key,
 
         }
+
+    async def check_connection(self) -> bool:
+        try:
+            account = await self._get_json("/v2/account")
+            return isinstance(account, dict) and bool(account.get("id"))
+        except (httpx.HTTPError, ValueError):
+            return False
 
     def _url(self, path: str) -> str:
 
@@ -267,6 +275,17 @@ class AlpacaAdapter(BrokerAdapter):
             )
 
             return httpx.Response(422, json={"message": str(exc)})
+
+        # No cached preflight or provider marketState may authorize submission.
+        if str(settings.TRADING_MODE).upper() == "PAPER" and self.base_url != "https://paper-api.alpaca.markets":
+            return httpx.Response(503, json={"message": "session_unverified: non-Paper broker authority"})
+        try:
+            session = validate_execution_clock(await self._get_json("/v2/clock"))
+        except (httpx.HTTPError, ValueError, TypeError):
+            session = "session_unverified"
+        if session != "open":
+            return httpx.Response(503 if session == "session_unverified" else 409,
+                                  json={"message": session})
 
         logger.info(
 

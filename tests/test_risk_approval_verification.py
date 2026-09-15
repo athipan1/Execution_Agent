@@ -127,3 +127,13 @@ async def test_rejects_mismatched_symbol_side_account_or_quantity():
         service = ExecutionService(db, NoopBroker())
         with pytest.raises(RiskApprovalError, match=message):
             await service.create_order(order_request)
+
+
+@pytest.mark.asyncio
+async def test_test_named_approval_is_never_synthesized_in_production_service():
+    db = InMemoryDatabaseClient()
+    service = ExecutionService(db, NoopBroker())
+    with pytest.raises(RiskApprovalError, match="was not found"):
+        await service.create_order(request(risk_approval_id="risk-test-approval"))
+    assert await db.get_risk_approval("risk-test-approval") is None
+    assert await db.get_order_by_trade_id("trade-ok") is None

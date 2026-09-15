@@ -29,6 +29,8 @@ def sample_order():
         order_type=OrderType.MARKET,
         quantity=1,
         time_in_force=TimeInForce.GTC,
+        guard_plan={"symbol":"AAPL", "side":"sell", "quantity":1,
+                    "trigger_price":90, "take_profit_price":120},
     )
 
 
@@ -61,7 +63,8 @@ async def test_check_connection_failure(alpaca_adapter):
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_place_order_success(alpaca_adapter, sample_order):
+async def test_place_order_success(alpaca_adapter, sample_order, open_clock):
+    respx.get(f"{settings.ALPACA_API_URL}/v2/clock").respond(200, json=open_clock)
     """
     Tests a successful order placement workflow with API Key authentication.
     """
@@ -79,12 +82,14 @@ async def test_place_order_success(alpaca_adapter, sample_order):
         "status": OrderStatus.PLACED,
         "broker_order_id": "broker-order-id-123",
         "executed_quantity": 0,
+        "broker_status": "accepted",
     })
 
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_place_order_api_failure(alpaca_adapter, sample_order):
+async def test_place_order_api_failure(alpaca_adapter, sample_order, open_clock):
+    respx.get(f"{settings.ALPACA_API_URL}/v2/clock").respond(200, json=open_clock)
     """
     Tests the workflow where the Alpaca API returns an error during order placement.
     """

@@ -30,6 +30,7 @@ def pending_order():
         side=OrderSide.BUY,
         order_type=OrderType.MARKET,
         quantity=10,
+        time_in_force="GTC",
         status=OrderStatus.PENDING,
     )
 

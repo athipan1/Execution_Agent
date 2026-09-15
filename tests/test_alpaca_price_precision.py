@@ -19,6 +19,7 @@ def _order(**kwargs):
             "side": "sell",
             "quantity": 82,
             "trigger_price": 92.984,
+            "take_profit_price": 110,
         },
     }
     values.update(kwargs)
@@ -39,7 +40,7 @@ def test_alpaca_price_allows_four_decimals_below_one_dollar():
 def test_build_alpaca_entry_payload_normalizes_stop_loss_price_precision():
     payload = build_alpaca_entry_payload(_order())
 
-    assert payload["order_class"] == "oto"
+    assert payload["order_class"] == "bracket"
     assert payload["stop_loss"] == {"stop_price": "92.98"}
 
 

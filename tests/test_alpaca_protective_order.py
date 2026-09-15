@@ -85,7 +85,8 @@ async def test_live_alpaca_refuses_sl_only_order_before_broker_call():
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_live_alpaca_submits_bracket_order_when_tp_and_sl_exist():
+async def test_live_alpaca_submits_bracket_order_when_tp_and_sl_exist(open_clock):
+    respx.get(f"{settings.ALPACA_API_URL}/v2/clock").respond(200, json=open_clock)
     adapter = AlpacaAdapter()
     order_request = respx.post(f"{settings.ALPACA_API_URL}/v2/orders").mock(
         return_value=Response(200, json={"id": "broker-bracket-id-123", "status": "accepted"})
