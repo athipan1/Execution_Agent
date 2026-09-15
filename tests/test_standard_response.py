@@ -10,7 +10,7 @@ def client():
     with TestClient(app) as c:
         yield c
 
-def test_standard_response_success_format(client):
+def test_standard_response_success_format(client, approved_order):
     trade_data = {
         "trade_id": "standard-test-id",
         "account_id": 1,
@@ -20,9 +20,9 @@ def test_standard_response_success_format(client):
         "order_type": "market"
     }
     headers = {"X-API-KEY": settings.API_KEY}
-    response = client.post("/execute", headers=headers, json=trade_data)
+    response = client.post("/execute", headers=headers, json=approved_order(trade_data))
 
-    assert response.status_code == 200
+    assert response.status_code == 202
     json_data = response.json()
 
     # Verify StandardAgentResponse structure
@@ -39,7 +39,7 @@ def test_standard_response_success_format(client):
         pytest.fail(f"Timestamp {json_data['timestamp']} is not a valid ISO-8601 string")
 
     # Verify expanded OrderResponse fields
-    order_data = json_data["data"]
+    order_data = json_data["data"]["order"]
     expected_fields = [
         "order_id", "trade_id", "account_id", "symbol", "side",
         "order_type", "price", "quantity", "time_in_force", "status",
@@ -49,7 +49,7 @@ def test_standard_response_success_format(client):
     for field in expected_fields:
         assert field in order_data, f"Field {field} missing in OrderResponse"
 
-def test_standard_response_error_format(client):
+def test_standard_response_error_format(client, approved_order):
     # Trigger an error (unauthorized)
     response = client.post("/execute", headers={"X-API-KEY": "wrong-key"}, json={})
 
