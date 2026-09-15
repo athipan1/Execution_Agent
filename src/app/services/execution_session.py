@@ -1,8 +1,13 @@
 """Validate a fresh broker clock immediately before an Alpaca order mutation."""
 from datetime import datetime, timezone
+import re
 
 
 def _aware(value):
+    if not isinstance(value, str) or not re.fullmatch(
+        r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)', value
+    ):
+        return None
     try:
         parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
         return parsed.astimezone(timezone.utc) if parsed.tzinfo else None
