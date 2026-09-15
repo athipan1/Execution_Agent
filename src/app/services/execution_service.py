@@ -10,7 +10,7 @@ from app.models import (
     RiskApprovalStatus,
     FillPayload,
 )
-from app.db_client import DatabaseClient, InMemoryDatabaseClient
+from app.db_client import DatabaseClient
 from app.adapters.base import BrokerAdapter
 from app.config import settings
 from app.logging import get_logger
@@ -67,29 +67,9 @@ class ExecutionService:
         if approval.approved_quantity != order_request.final_quantity or approval.approved_quantity != order_request.quantity:
             raise RiskApprovalError("Risk approval quantity does not match order quantity.")
 
-    def _seed_in_memory_test_approval(self, order_request: CreateOrderRequest) -> None:
-        if not isinstance(self.db_client, InMemoryDatabaseClient):
-            return
-        if order_request.risk_approval_id != "risk-test-approval":
-            return
-        self.db_client.seed_risk_approval(
-            RiskApproval(
-                approval_id=order_request.risk_approval_id,
-                account_id=order_request.account_id,
-                symbol=order_request.symbol,
-                side=order_request.side,
-                approved_quantity=order_request.final_quantity,
-                status=RiskApprovalStatus.APPROVED,
-                expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
-            )
-        )
-
     async def verify_risk_approval(self, order_request: CreateOrderRequest) -> RiskApproval:
         self._validate_execution_risk_gate(order_request)
         approval = await self.db_client.get_risk_approval(order_request.risk_approval_id)
-        if not approval:
-            self._seed_in_memory_test_approval(order_request)
-            approval = await self.db_client.get_risk_approval(order_request.risk_approval_id)
         if not approval:
             raise RiskApprovalError(f"Risk approval {order_request.risk_approval_id} was not found.")
         self._validate_risk_approval(approval, order_request)
@@ -324,6 +304,14 @@ class ExecutionService:
         return order
 
     async def start_order_execution(self, order: Order) -> Order:
+        # HTTP batch replays can return an existing order and succeeded job.
+        # Consult persisted state before broker I/O, including stale caller objects.
+        order = await self.db_client.get_order_by_order_id(order.order_id) or order
+        if order.broker_order_id or order.status in {
+            OrderStatus.PLACED, OrderStatus.PARTIALLY_FILLED,
+            OrderStatus.EXECUTED, OrderStatus.CANCELLED,
+        }:
+            return order
         try:
             await self.run_broker_preflight(order)
             await self.broker_adapter.place_order(order, self._handle_broker_updates)
