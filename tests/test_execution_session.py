@@ -9,6 +9,15 @@ from app.config import settings
 from app.models import Order
 
 
+@pytest.mark.parametrize('field', ['timestamp','next_open','next_close'])
+def test_invalid_timezone_minutes_are_not_normalized(field, open_clock):
+    from app.services.execution_session import validate_execution_clock
+    clock = dict(open_clock)
+    parsed = datetime.fromisoformat(clock[field].replace('Z','+00:00'))
+    clock[field] = (parsed+timedelta(minutes=99)).strftime('%Y-%m-%dT%H:%M:%S')+'+00:99'
+    assert validate_execution_clock(clock) == 'session_unverified'
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("case", ["closed", "stale", "missing", "naive", "invalid_boolean", "boundary", "outage"])
 async def test_clock_failure_never_submits_order(case, open_clock, respx_mock, monkeypatch):
