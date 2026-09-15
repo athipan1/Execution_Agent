@@ -64,6 +64,7 @@ def pending_order():
         order_type=OrderType.MARKET,
         price=100.0,
         quantity=5,
+        time_in_force="GTC",
         status=OrderStatus.PENDING,
         guard_plan={"source": "risk_agent", "trigger_price": 95},
         protective_exit={"stop_loss": 95, "take_profit": 110},
