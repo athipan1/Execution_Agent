@@ -24,7 +24,8 @@ def _payload(symbol, bucket="core_dividend", trade_id=None):
     }
 
 
-def test_batch_endpoint_rejects_duplicate_symbol():
+def test_batch_endpoint_rejects_duplicate_symbol(monkeypatch):
+    monkeypatch.setattr(settings, "TRADING_ENABLED", True)
     with TestClient(app) as client:
         response = client.post(
             "/execute/batch",
@@ -39,7 +40,8 @@ def test_batch_endpoint_rejects_duplicate_symbol():
     assert any(error["code"] == "DUPLICATE_SYMBOL_IN_BATCH" for error in data["validation"]["errors"])
 
 
-def test_batch_endpoint_rejects_multiple_news_momentum():
+def test_batch_endpoint_rejects_multiple_news_momentum(monkeypatch):
+    monkeypatch.setattr(settings, "TRADING_ENABLED", True)
     with TestClient(app) as client:
         response = client.post(
             "/execute/batch",
