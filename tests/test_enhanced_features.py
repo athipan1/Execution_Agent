@@ -13,7 +13,7 @@ def client():
 API_KEY = settings.API_KEY
 HEADERS = {"X-API-KEY": API_KEY}
 
-def test_limit_order_missing_price(client):
+def test_limit_order_missing_price(client, approved_order):
     """
     Test that a limit order fails if price is missing.
     """
@@ -27,11 +27,11 @@ def test_limit_order_missing_price(client):
         "quantity": 10,
         # price is missing
     }
-    response = client.post("/execute", headers=HEADERS, json=order_data)
+    response = client.post("/execute", headers=HEADERS, json=approved_order(order_data))
     assert response.status_code == 422 # Pydantic validation error
     assert "Price is required for limit orders" in response.text
 
-def test_limit_order_with_price(client):
+def test_limit_order_with_price(client, approved_order):
     """
     Test that a limit order succeeds if price is provided.
     """
@@ -45,13 +45,13 @@ def test_limit_order_with_price(client):
         "quantity": 10,
         "price": 150.5
     }
-    response = client.post("/execute", headers=HEADERS, json=order_data)
-    assert response.status_code == 200
+    response = client.post("/execute", headers=HEADERS, json=approved_order(order_data))
+    assert response.status_code == 202
     data = response.json()
     assert data["status"] == "success"
-    assert data["data"]["price"] == 150.5
+    assert data["data"]["order"]["price"] == 150.5
 
-def test_cancel_order_flow(client):
+def test_cancel_order_flow(client, approved_order):
     """
     Test cancelling an order.
     """
@@ -65,8 +65,8 @@ def test_cancel_order_flow(client):
         "quantity": 10
     }
     # 1. Create order
-    response = client.post("/execute", headers=HEADERS, json=order_data)
-    order_id = response.json()["data"]["order_id"]
+    response = client.post("/execute", headers=HEADERS, json=approved_order(order_data))
+    order_id = response.json()["data"]["order"]["order_id"]
 
     # 2. Cancel it
     # Note: Simulator might execute it very fast.
@@ -81,7 +81,7 @@ def test_cancel_order_flow(client):
         assert response.status_code == 400
         assert "cannot be cancelled" in response.json()["error"]["message"]
 
-def test_auto_refresh_status(client):
+def test_auto_refresh_status(client, approved_order):
     """
     Test that GET /execute/{order_id} refreshes status.
     """
@@ -95,10 +95,12 @@ def test_auto_refresh_status(client):
         "quantity": 100
     }
     # 1. Create order
-    response = client.post("/execute", headers=HEADERS, json=order_data)
-    order_id = response.json()["data"]["order_id"]
+    response = client.post("/execute", headers=HEADERS, json=approved_order(order_data))
+    order_id = response.json()["data"]["order"]["order_id"]
 
-    # Immediately it might be PENDING or PLACED
+    client.post("/jobs/process-next", headers=HEADERS)
+
+    # Worker submission precedes broker status refresh
 
     # 2. Get order status - this should trigger refresh
     # Simulator.get_order_status returns EXECUTED
