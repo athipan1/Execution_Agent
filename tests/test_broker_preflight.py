@@ -148,6 +148,41 @@ async def test_replay_protected_status_never_submits_even_without_broker_id(stat
     assert broker.placed_orders == []
 
 
+@pytest.mark.asyncio
+async def test_ambiguous_submission_timeout_and_fresh_worker_retry_never_resubmit():
+    class TimeoutAfterAccept(FakeBroker):
+        requires_persisted_submission_claim = True
+
+        async def place_order(self, order, callback):
+            self.placed_orders.append(order)
+            raise TimeoutError("broker may already have accepted")
+
+    db = InMemoryDatabaseClient()
+    original = await db.create_order(order_request("ambiguous-submission"))
+    broker = TimeoutAfterAccept()
+    first = await ExecutionService(db, broker).start_order_execution(original)
+    assert first.status == OrderStatus.FAILED
+    replay = await ExecutionService(db, broker).start_order_execution(original)
+    assert replay.reason == "BROKER_SUBMISSION_REQUIRES_RECONCILIATION"
+    assert len(broker.placed_orders) == 1
+
+
+@pytest.mark.asyncio
+async def test_dropped_submission_claim_blocks_before_broker_submission():
+    class DropsMetadata(InMemoryDatabaseClient):
+        async def update_order(self, order_id, updates):
+            return await super().update_order(order_id, {k:v for k,v in updates.items() if k != "metadata"})
+
+    db = DropsMetadata()
+    original = await db.create_order(order_request("lost-submission-claim"))
+    broker = FakeBroker()
+    broker.requires_persisted_submission_claim = True
+    result = await ExecutionService(db, broker).start_order_execution(original)
+    assert result.status == OrderStatus.FAILED
+    assert result.reason == "BROKER_SUBMISSION_CLAIM_NOT_PERSISTED"
+    assert broker.placed_orders == []
+
+
 def test_validate_broker_preflight_snapshot_has_buying_power_details():
     order = order_request("trade-snapshot", quantity=5, price=100).model_dump()
     from app.models import Order

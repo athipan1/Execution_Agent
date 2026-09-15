@@ -48,6 +48,7 @@ def _normalize_base_url(url: str) -> str:
     return base_url
 
 class AlpacaAdapter(BrokerAdapter):
+    requires_persisted_submission_claim = True
 
     """
 

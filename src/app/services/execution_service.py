@@ -312,8 +312,25 @@ class ExecutionService:
             OrderStatus.EXECUTED, OrderStatus.CANCELLED,
         }:
             return order
+        if (order.metadata or {}).get("broker_submission_claim"):
+            # A worker may have lost the broker response after submission.
+            # Never infer rejection from a timeout or resubmit without recovery.
+            return await self.db_client.update_order(order.order_id, {
+                "status": OrderStatus.FAILED,
+                "reason": "BROKER_SUBMISSION_REQUIRES_RECONCILIATION",
+            })
         try:
             await self.run_broker_preflight(order)
+            if getattr(self.broker_adapter, "requires_persisted_submission_claim", False):
+                claim = {"order_id": order.order_id, "trade_id": str(order.trade_id),
+                         "reserved_at": datetime.now(timezone.utc).isoformat()}
+                await self.db_client.update_order(order.order_id, {
+                    "metadata": {**(order.metadata or {}), "broker_submission_claim": claim},
+                })
+                persisted = await self.db_client.get_order_by_order_id(order.order_id)
+                if not persisted or (persisted.metadata or {}).get("broker_submission_claim") != claim:
+                    raise RuntimeError("BROKER_SUBMISSION_CLAIM_NOT_PERSISTED")
+                order = persisted
             await self.broker_adapter.place_order(order, self._handle_broker_updates)
             return await self.db_client.get_order_by_order_id(order.order_id) or order
         except BrokerPreflightError as exc:
