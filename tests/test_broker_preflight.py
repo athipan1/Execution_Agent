@@ -123,6 +123,31 @@ async def test_preflight_allows_healthy_broker_and_places_order():
     assert len(broker.placed_orders) == 1
 
 
+@pytest.mark.asyncio
+async def test_replay_with_stale_caller_order_never_resubmits_to_broker():
+    db = InMemoryDatabaseClient()
+    original = await db.create_order(order_request("trade-replay"))
+    broker = FakeBroker()
+    service = ExecutionService(db, broker)
+    first = await service.start_order_execution(original)
+    second = await service.start_order_execution(original)
+    assert first.broker_order_id == second.broker_order_id
+    assert len(broker.placed_orders) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [OrderStatus.PLACED, OrderStatus.PARTIALLY_FILLED,
+                                    OrderStatus.EXECUTED, OrderStatus.CANCELLED])
+async def test_replay_protected_status_never_submits_even_without_broker_id(status):
+    db = InMemoryDatabaseClient()
+    original = await db.create_order(order_request("trade-status-replay"))
+    await db.update_order(original.order_id, {"status": status})
+    broker = FakeBroker()
+    updated = await ExecutionService(db, broker).start_order_execution(original)
+    assert updated.status == status
+    assert broker.placed_orders == []
+
+
 def test_validate_broker_preflight_snapshot_has_buying_power_details():
     order = order_request("trade-snapshot", quantity=5, price=100).model_dump()
     from app.models import Order
