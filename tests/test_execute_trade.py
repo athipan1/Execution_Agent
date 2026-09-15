@@ -14,7 +14,7 @@ def client():
 API_KEY = settings.API_KEY
 HEADERS = {"X-API-KEY": API_KEY}
 
-def test_execute_trade_success(client: TestClient):
+def test_execute_trade_success(client: TestClient, approved_order):
     trade_id = str(uuid.uuid4())
     trade_data = {
         "trade_id": trade_id,
@@ -25,13 +25,15 @@ def test_execute_trade_success(client: TestClient):
         "order_type": "market"
     }
     # /execute_trade is an alias for /execute
-    response = client.post("/execute_trade", headers=HEADERS, json=trade_data)
-    assert response.status_code == 200
+    response = client.post("/execute_trade", headers=HEADERS, json=approved_order(trade_data))
+    assert response.status_code == 202
     data = response.json()
     assert data["status"] == "success"
-    result = data["data"]
+    result = data["data"]["order"]
     assert result["status"] in ["pending", "executed"]
     order_id = result["order_id"]
+
+    client.post("/jobs/process-next", headers=HEADERS)
 
     # Poll for completion since it's now handled in background
     for _ in range(10):
@@ -42,7 +44,7 @@ def test_execute_trade_success(client: TestClient):
     else:
         pytest.fail("Order did not reach 'executed' status")
 
-def test_execute_trade_fail(client: TestClient):
+def test_execute_trade_fail(client: TestClient, approved_order):
     trade_id = str(uuid.uuid4())
     trade_data = {
         "trade_id": trade_id,
@@ -52,12 +54,14 @@ def test_execute_trade_fail(client: TestClient):
         "side": "sell",
         "order_type": "market"
     }
-    response = client.post("/execute_trade", headers=HEADERS, json=trade_data)
-    assert response.status_code == 200
+    response = client.post("/execute_trade", headers=HEADERS, json=approved_order(trade_data))
+    assert response.status_code == 202
     data = response.json()
     assert data["status"] == "success"
-    result = data["data"]
+    result = data["data"]["order"]
     order_id = result["order_id"]
+
+    client.post("/jobs/process-next", headers=HEADERS)
 
     # Poll for completion
     for _ in range(10):
@@ -68,7 +72,7 @@ def test_execute_trade_fail(client: TestClient):
     else:
         pytest.fail("Order did not reach 'failed' status")
 
-def test_execute_trade_unauthorized(client: TestClient):
+def test_execute_trade_unauthorized(client: TestClient, approved_order):
     trade_data = {
         "trade_id": "some-id",
         "account_id": 1,
@@ -78,7 +82,7 @@ def test_execute_trade_unauthorized(client: TestClient):
         "order_type": "market"
     }
     # Test without API key
-    response = client.post("/execute_trade", json=trade_data)
+    response = client.post("/execute_trade", json=approved_order(trade_data))
     assert response.status_code == 401
     data = response.json()
     assert data["status"] == "error"
