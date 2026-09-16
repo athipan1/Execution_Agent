@@ -23,6 +23,7 @@ from app.services.strategy_bucket_contract import (
 )
 from typing import Dict, Any, Optional
 from datetime import datetime, timezone, timedelta
+from decimal import Decimal
 
 logger = get_logger(__name__)
 
@@ -223,9 +224,18 @@ class ExecutionService:
         return max(0, new_qty - old_qty)
 
     def _fill_payload_from_update(self, previous_order: Order, updates: Dict[str, Any], fill_quantity: int) -> Optional[FillPayload]:
-        fill_price = updates.get("avg_execution_price") or previous_order.avg_execution_price
-        if not fill_price or fill_quantity <= 0:
+        if fill_quantity <= 0:
             return None
+        # Broker averages describe cumulative notional, not the new fill alone.
+        cumulative_average = updates.get("avg_execution_price")
+        old_quantity = int(previous_order.executed_quantity or 0)
+        if cumulative_average is None or (old_quantity and previous_order.avg_execution_price is None):
+            raise ValueError("fill_notional_evidence_missing")
+        new_notional = Decimal(str(cumulative_average)) * (old_quantity + fill_quantity)
+        old_notional = Decimal(str(previous_order.avg_execution_price or 0)) * old_quantity
+        fill_price = (new_notional - old_notional) / fill_quantity
+        if not fill_price.is_finite() or fill_price <= 0:
+            raise ValueError("fill_notional_evidence_invalid")
         filled_at = updates.get("executed_at") or datetime.now(timezone.utc)
         broker_order_id = updates.get("broker_order_id") or previous_order.broker_order_id
         broker_fill_id = updates.get("broker_fill_id") or f"{broker_order_id or previous_order.order_id}:{updates.get('executed_quantity')}"
@@ -289,6 +299,12 @@ class ExecutionService:
             logger.error("Received broker update without an order_id.", extra={"update_data": updates})
             return
         previous_order = await self.db_client.get_order_by_order_id(order_id)
+        if previous_order:
+            # Reject incomplete monetary evidence before advancing the quantity
+            # checkpoint, so a later reconciliation can recover the missing fill.
+            self._fill_payload_from_update(
+                previous_order, updates, self._executed_quantity_delta(previous_order, updates)
+            )
         await self.db_client.update_order(order_id, updates)
         await self._record_fill_from_update(previous_order, updates)
 
