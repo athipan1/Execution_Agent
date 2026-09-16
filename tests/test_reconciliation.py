@@ -136,7 +136,7 @@ async def test_reconcile_does_not_record_fill_when_quantity_unchanged():
 async def test_reconcile_records_only_incremental_partial_fill_delta():
     db = InMemoryDatabaseClient()
     order = await db.create_order(order_request("trade-reconcile-partial-delta"))
-    await db.update_order(order.order_id, {"status": OrderStatus.PARTIALLY_FILLED, "broker_order_id": "broker-delta", "executed_quantity": 4})
+    await db.update_order(order.order_id, {"status": OrderStatus.PARTIALLY_FILLED, "broker_order_id": "broker-delta", "executed_quantity": 4, "avg_execution_price": 99.0})
     broker = FakeBroker({
         "broker-delta": {
             "status": OrderStatus.EXECUTED,
@@ -152,6 +152,30 @@ async def test_reconcile_records_only_incremental_partial_fill_delta():
 
     assert len(db.fills) == 1
     assert db.fills[0]["quantity"] == 6
+    assert db.fills[0]["fill_price"] == 104.0
+    assert 4 * 99 + 6 * db.fills[0]["fill_price"] == 10 * 102
+    await service.reconcile_broker_orders()
+    assert len(db.fills) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("old_average,new_average", [(None, 102.0), (99.0, None), (99.0, 1.0)])
+async def test_incomplete_fill_notional_does_not_advance_reconciliation_checkpoint(old_average, new_average):
+    db = InMemoryDatabaseClient()
+    order = await db.create_order(order_request("missing-notional"))
+    await db.update_order(order.order_id, {
+        "status": OrderStatus.PARTIALLY_FILLED, "broker_order_id": "missing",
+        "executed_quantity": 4, "avg_execution_price": old_average,
+    })
+    broker = FakeBroker({"missing": {
+        "status": OrderStatus.EXECUTED, "executed_quantity": 10,
+        "avg_execution_price": new_average,
+    }})
+    report = await ExecutionService(db, broker).reconcile_broker_orders()
+    assert report.errors == 1
+    assert "fill_notional_evidence_" in report.items[0].message
+    assert (await db.get_order_by_order_id(order.order_id)).executed_quantity == 4
+    assert db.fills == []
 
 
 @pytest.mark.asyncio
