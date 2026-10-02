@@ -17,11 +17,11 @@ FROM python:3.12-slim
 RUN apt-get update && apt-get install -y --no-install-recommends curl && \
     rm -rf /var/lib/apt/lists/*
 
-# Gunicorn may create a runtime control directory under HOME. Keep the image non-root.
-RUN mkdir -p /home/appuser/.gunicorn && chown -R appuser:appgroup /home/appuser
-
 # Create a non-root user and group for security
 RUN addgroup --system appgroup && adduser --system --ingroup appgroup appuser
+
+# Gunicorn may create a runtime control directory under HOME. Keep the image non-root.
+RUN mkdir -p /home/appuser/.gunicorn && chown -R appuser:appgroup /home/appuser
 
 # Set working directory. All subsequent paths are relative to this directory.
 WORKDIR /home/appuser
