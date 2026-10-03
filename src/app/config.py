@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     TRADING_MODE: str = "PAPER"
     TRADING_ENABLED: bool = False
     ALLOW_LIVE_TRADING: bool = False
+    # Test Mode exercises the full execution lifecycle with the in-memory simulator.
+    # It is PAPER-only and must never instantiate or call Alpaca.
+    TEST_MODE: bool = False
 
     # Broker configuration
     BROKER_MODE: str = "SIMULATOR"  # Can be "SIMULATOR" or "ALPACA"
