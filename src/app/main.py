@@ -408,6 +408,7 @@ async def readiness_check():
             "trading_mode": trading_mode,
             "trading_enabled": settings.TRADING_ENABLED,
             "allow_live_trading": settings.ALLOW_LIVE_TRADING,
+            "test_mode": settings.TEST_MODE,
             "broker_mode": broker_mode,
             "broker_mode_supported": broker_mode_supported,
             "live_guard_ok": live_guard_ok,
