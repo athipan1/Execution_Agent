@@ -73,6 +73,10 @@ def _should_process_batch_now(auto_process: Optional[bool]) -> bool:
 
 def get_broker_adapter() -> BrokerAdapter:
     broker_mode = _validate_broker_mode()
+    if settings.TEST_MODE:
+        if _trading_mode() != "PAPER" or settings.ALLOW_LIVE_TRADING:
+            raise RuntimeError("TEST_MODE requires TRADING_MODE=PAPER and ALLOW_LIVE_TRADING=false.")
+        return SimulatorAdapter()
     if broker_mode == "ALPACA":
         return HydratedAlpacaAdapter()
     return SimulatorAdapter()

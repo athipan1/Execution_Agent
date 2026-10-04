@@ -19,6 +19,10 @@ def validate_worker_configuration() -> str:
     broker = broker_mode()
     if mode not in {"PAPER", "LIVE"}:
         raise RuntimeError("TRADING_MODE must be PAPER or LIVE.")
+    if settings.TEST_MODE:
+        if mode != "PAPER" or settings.ALLOW_LIVE_TRADING:
+            raise RuntimeError("TEST_MODE requires TRADING_MODE=PAPER and ALLOW_LIVE_TRADING=false.")
+        return "SIMULATOR"
     if mode == "LIVE":
         if not settings.ALLOW_LIVE_TRADING:
             raise RuntimeError("LIVE execution worker requires ALLOW_LIVE_TRADING=true.")
@@ -31,6 +35,8 @@ def validate_worker_configuration() -> str:
 
 def build_broker_adapter() -> BrokerAdapter:
     broker = validate_worker_configuration()
+    if settings.TEST_MODE:
+        return SimulatorAdapter()
     if broker == "ALPACA":
         return AlpacaAdapter()
     return SimulatorAdapter()

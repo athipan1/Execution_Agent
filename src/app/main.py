@@ -136,6 +136,14 @@ def _should_process_batch_now(auto_process: Optional[bool]) -> bool:
 
 def get_broker_adapter() -> BrokerAdapter:
 
+    if settings.TEST_MODE:
+
+        if _trading_mode() != "PAPER" or settings.ALLOW_LIVE_TRADING:
+
+            raise RuntimeError("TEST_MODE requires TRADING_MODE=PAPER and ALLOW_LIVE_TRADING=false.")
+
+        return SimulatorAdapter()
+
     broker_mode = _validate_broker_mode()
 
     if broker_mode == "ALPACA":
@@ -408,6 +416,7 @@ async def readiness_check():
             "trading_mode": trading_mode,
             "trading_enabled": settings.TRADING_ENABLED,
             "allow_live_trading": settings.ALLOW_LIVE_TRADING,
+            "test_mode": settings.TEST_MODE,
             "broker_mode": broker_mode,
             "broker_mode_supported": broker_mode_supported,
             "live_guard_ok": live_guard_ok,
